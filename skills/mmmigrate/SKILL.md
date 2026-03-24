@@ -24,8 +24,8 @@ edit current.sql → apply -current (dev, iterate) → commit → apply (prod)
                                                   revert (files only)
 ```
 
-1. Write SQL in `migrations/current.sql` (use `-- @include path` for shared files)
-2. Dev: `mmmigrate apply -current` — runs numbered migrations + current.sql. Re-running after edits reapplies if the checksum changed (tracked via `mmmigrate_current` table)
+1. Write **idempotent** SQL in `migrations/current.sql` (use `-- @include path` for shared files). Idempotent means safe to re-run: use `CREATE TABLE IF NOT EXISTS`, `DROP FUNCTION IF EXISTS ... CREATE FUNCTION`, etc.
+2. Dev: `mmmigrate apply -current` — runs numbered migrations + current.sql. Re-running after edits reapplies if the checksum changed, so current.sql **must** be idempotent
 3. Ready: `mmmigrate commit -description "..."` — tests SQL against DB, creates `NNN_name.sql` with checksum/chain, clears current.sql
 4. Prod: `mmmigrate apply` — only committed numbered migrations, each in its own transaction
 5. Mistake: `mmmigrate revert` — **file operation only**: moves last committed migration back to current.sql, restoring `@include` directives. Does NOT undo applied SQL on the database. To fix an applied migration, write corrective SQL in current.sql and commit a new migration.
@@ -102,4 +102,5 @@ import (
 | Forgetting `-current` in dev | Without it, `apply` only runs numbered migrations, not current.sql |
 | Expecting `revert` to undo DB changes | `revert` is file-only. Write corrective SQL and commit a new migration |
 | Committing without DB | `commit` tests SQL against a real database — provide DATABASE_URL |
+| Non-idempotent current.sql | current.sql is re-run when it changes — use `IF NOT EXISTS`, `DROP ... CREATE`, etc. |
 | Duplicate version numbers | Two files with the same `NNN_` prefix will error on load |

@@ -101,7 +101,7 @@ mmmigrate borrows the `current.sql` workflow from [Graphile Migrate](https://git
 | **Includes** | `--! include` from a fixtures folder | `-- @include` from migrations subdirectories, restored on revert |
 | **Shadow DB** | Required, auto-created via root DB connection | Optional (`-shadow-url`), user-managed |
 | **Concurrency** | Advisory lock | Advisory lock (PostgreSQL), file lock (SQLite) |
-| **current.sql** | Must be idempotent (re-run on every save in watch mode) | Not idempotent — applied once, tracked by checksum |
+| **current.sql** | Must be idempotent; re-run on every file save (watch mode) | Must be idempotent; re-run when checksum changes |
 | **Watch mode** | Yes (auto-applies on file change) | No (explicit `apply -current`) |
 | **Placeholders** | `:PLACEHOLDER_NAME` substitution in SQL | Not supported |
 | **Hooks** | beforeReset, afterReset, beforeAll, afterAll, etc. | Not supported |
