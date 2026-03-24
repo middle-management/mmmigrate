@@ -1,1 +1,0 @@
-ALTER TABLE route ADD COLUMN IF NOT EXISTS description TEXT;
