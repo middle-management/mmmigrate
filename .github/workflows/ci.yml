@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Source tests
+        run: go test ./source/...
+
+      - name: SQLite integration tests
+        run: cd driver/sqlite && go test -race ./...
+
+      - name: Build (sqlite)
+        run: go build -tags sqlite .
+
+      - name: Build (postgres)
+        run: go build -tags postgres .
+
+      - name: Vet
+        run: go vet ./...
