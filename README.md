@@ -1,6 +1,6 @@
 # mmmigrate
 
-A forward-only SQL migration tool for PostgreSQL and SQLite.
+A forward-only SQL migration tool for PostgreSQL and SQLite, inspired by [Graphile Migrate](https://github.com/graphile/migrate).
 
 Migrations are plain SQL files. You edit `current.sql` during development, commit it as a numbered migration when ready, and apply to production. Shared SQL (functions, views) can be reused across migrations via `@include` directives. A merkle chain ensures no committed migration is ever tampered with.
 
@@ -88,6 +88,23 @@ import (
 
 // migrate.RunMigrations(ctx, db, migrate.DefaultDialect(), "migrations", false)
 ```
+
+## Differences from Graphile Migrate
+
+mmmigrate borrows the `current.sql` workflow from [Graphile Migrate](https://github.com/graphile/migrate) but differs in several ways:
+
+| | Graphile Migrate | mmmigrate |
+|---|---|---|
+| **Language** | Node.js | Go (single binary, no runtime) |
+| **Databases** | PostgreSQL only | PostgreSQL and SQLite via pluggable drivers |
+| **Includes** | Not supported | `@include` directives for shared SQL (functions, views) |
+| **Integrity** | None | SHA-256 checksums + merkle chain across all migrations |
+| **Shadow DB** | Required (auto-created) | Optional (`-shadow-url`), user-managed |
+| **Concurrency** | Not handled | Advisory locking for safe multi-pod deploys |
+| **Down migrations** | Not supported | Not supported (forward-only) |
+| **Watch mode** | Yes (auto-applies on file change) | No (explicit `apply -current`) |
+| **Afterall migrations** | Yes (idempotent SQL re-run after every migration) | Use `@include` in `current.sql` instead |
+| **Usable as library** | No | Yes — `migrate` and `source` packages with `database/sql` |
 
 ## License
 
