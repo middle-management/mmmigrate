@@ -1,6 +1,6 @@
 # mmmigrate
 
-A forward-only SQL migration tool for PostgreSQL and SQLite, inspired by [Graphile Migrate](https://github.com/graphile/migrate).
+A forward-only SQL migration tool for PostgreSQL, SQLite, and MySQL, inspired by [Graphile Migrate](https://github.com/graphile/migrate).
 
 Migrations are plain SQL files. You edit `current.sql` during development, commit it as a numbered migration when ready, and apply to production. Shared SQL (functions, views) can be reused across migrations via `@include` directives. A merkle chain ensures no committed migration is ever tampered with.
 
@@ -8,8 +8,9 @@ Migrations are plain SQL files. You edit `current.sql` during development, commi
 
 ```bash
 # From source (pick your driver)
-go install -tags sqlite  github.com/middle-management/mmmigrate@latest
-go install -tags postgres github.com/middle-management/mmmigrate@latest
+go install -tags sqlite   github.com/middle-management/mmmigrate@latest
+go install -tags postgres  github.com/middle-management/mmmigrate@latest
+go install -tags mysql     github.com/middle-management/mmmigrate@latest
 
 # Or download a binary from GitHub Releases
 ```
@@ -86,7 +87,7 @@ Each driver is a separate Go module:
 ```go
 import (
     "github.com/middle-management/mmmigrate/migrate"
-    "github.com/middle-management/mmmigrate/driver/postgres"
+    "github.com/middle-management/mmmigrate/driver/postgres" // or driver/sqlite, driver/mysql
 )
 
 // migrate.RunMigrations(ctx, db, postgres.Dialect{}, "migrations", false)

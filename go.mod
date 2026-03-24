@@ -3,6 +3,7 @@ module github.com/middle-management/mmmigrate
 go 1.26.1
 
 require (
+	github.com/middle-management/mmmigrate/driver/mysql v0.0.0
 	github.com/middle-management/mmmigrate/driver/postgres v0.0.0
 	github.com/middle-management/mmmigrate/driver/sqlite v0.0.0
 )
@@ -27,6 +28,7 @@ require (
 )
 
 replace (
+	github.com/middle-management/mmmigrate/driver/mysql => ./driver/mysql
 	github.com/middle-management/mmmigrate/driver/postgres => ./driver/postgres
 	github.com/middle-management/mmmigrate/driver/sqlite => ./driver/sqlite
 )

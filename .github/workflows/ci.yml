@@ -24,6 +24,19 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: mmmigrate_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h localhost"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
@@ -41,11 +54,19 @@ jobs:
         env:
           MMMIGRATE_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/mmmigrate_test?sslmode=disable
 
+      - name: MySQL integration tests
+        run: cd driver/mysql && go test -race ./...
+        env:
+          MMMIGRATE_TEST_MYSQL_URL: root:root@tcp(localhost:3306)/mmmigrate_test?multiStatements=true
+
       - name: Build (sqlite)
         run: go build -tags sqlite .
 
       - name: Build (postgres)
         run: go build -tags postgres .
+
+      - name: Build (mysql)
+        run: go build -tags mysql .
 
       - name: Vet
         run: go vet ./...

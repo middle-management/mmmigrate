@@ -5,7 +5,7 @@ description: Use when a project uses mmmigrate for database migrations, when the
 
 # mmmigrate
 
-File-based forward-only SQL migration tool: `current.sql` dev workflow, `@include` for shared SQL, merkle chain integrity. No down migrations — roll forward only.
+File-based forward-only SQL migration tool for PostgreSQL, SQLite, and MySQL: `current.sql` dev workflow, `@include` for shared SQL, merkle chain integrity. No down migrations — roll forward only.
 
 ## Setup
 
@@ -14,7 +14,7 @@ mkdir -p migrations
 touch migrations/current.sql   # your working file
 ```
 
-Build the CLI with a driver tag: `go build -tags sqlite .` or `go build -tags postgres .`
+Build the CLI with a driver tag: `go build -tags sqlite .`, `go build -tags postgres .`, or `go build -tags mysql .`
 
 ## Workflow
 
