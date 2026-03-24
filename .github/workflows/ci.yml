@@ -13,13 +13,13 @@ jobs:
       postgres:
         image: postgres:17
         env:
-          POSTGRES_USER: mmmigrate
-          POSTGRES_PASSWORD: mmmigrate
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
           POSTGRES_DB: mmmigrate_test
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U mmmigrate"
+          --health-cmd "pg_isready -U postgres"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 5
@@ -39,7 +39,7 @@ jobs:
       - name: PostgreSQL integration tests
         run: cd driver/postgres && go test -race ./...
         env:
-          MMMIGRATE_TEST_POSTGRES_URL: postgres://mmmigrate:mmmigrate@localhost:5432/mmmigrate_test?sslmode=disable
+          MMMIGRATE_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/mmmigrate_test?sslmode=disable
 
       - name: Build (sqlite)
         run: go build -tags sqlite .
