@@ -1,3 +1,5 @@
+-- server: sqlite 3.51.3
+
 -- table: mmmigrate_applied
 CREATE TABLE mmmigrate_applied (
 			version     INTEGER PRIMARY KEY,

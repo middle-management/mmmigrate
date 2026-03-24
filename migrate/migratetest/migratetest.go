@@ -25,6 +25,7 @@ type Harness struct {
 	// Dialect returns the dialect under test.
 	Dialect func(t *testing.T) migrate.Dialect
 	// DumpSchema returns a deterministic string representation of the database schema.
+	// The first line should be a "-- server: ..." comment with the database version.
 	DumpSchema func(t *testing.T, db *sql.DB) string
 	// TrackingTable is the name of the applied-migrations tracking table.
 	TrackingTable string

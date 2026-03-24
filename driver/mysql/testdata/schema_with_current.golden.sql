@@ -1,3 +1,5 @@
+-- server: 8.4.8
+
 -- table: mmmigrate_applied
   version int NOT NULL
   name varchar(255) NOT NULL

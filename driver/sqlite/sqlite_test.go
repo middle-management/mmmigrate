@@ -35,6 +35,9 @@ func TestSQLite(t *testing.T) {
 func dumpSQLiteSchema(t *testing.T, db *sql.DB) string {
 	t.Helper()
 
+	var version string
+	db.QueryRow("SELECT sqlite_version()").Scan(&version)
+
 	rows, err := db.Query(`
 		SELECT type, name, sql FROM sqlite_master
 		WHERE sql IS NOT NULL
@@ -58,5 +61,5 @@ func dumpSQLiteSchema(t *testing.T, db *sql.DB) string {
 	}
 
 	sort.Strings(stmts)
-	return strings.Join(stmts, "\n\n") + "\n"
+	return fmt.Sprintf("-- server: sqlite %s\n\n", version) + strings.Join(stmts, "\n\n") + "\n"
 }

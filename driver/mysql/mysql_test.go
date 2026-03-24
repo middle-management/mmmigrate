@@ -69,6 +69,9 @@ func resetDB(t *testing.T, db *sql.DB) {
 func dumpMySQLSchema(t *testing.T, db *sql.DB) string {
 	t.Helper()
 
+	var version string
+	db.QueryRow("SELECT version()").Scan(&version)
+
 	rows, err := db.Query(`
 		SELECT table_name, column_name, column_type, is_nullable, column_default
 		FROM information_schema.columns
@@ -107,6 +110,7 @@ func dumpMySQLSchema(t *testing.T, db *sql.DB) string {
 	sort.Strings(keys)
 
 	var out strings.Builder
+	fmt.Fprintf(&out, "-- server: %s\n\n", version)
 	for _, k := range keys {
 		fmt.Fprintf(&out, "-- table: %s\n", k)
 		for _, col := range tables[k] {
