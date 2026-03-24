@@ -5,9 +5,11 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/middle-management/mmmigrate/migrate"
@@ -102,8 +104,51 @@ func CompareGolden(t *testing.T, got, goldenPath string) {
 	}
 
 	if got != string(want) {
-		t.Errorf("schema does not match golden file %s\n\nwant:\n%s\ngot:\n%s", goldenPath, want, got)
+		t.Errorf("schema does not match golden file %s\n(run with MMMIGRATE_UPDATE_GOLDEN=1 to update)\n\n%s",
+			goldenPath, lineDiff(string(want), got))
 	}
+}
+
+// lineDiff produces a unified-style diff showing only changed lines.
+func lineDiff(want, got string) string {
+	wantLines := strings.Split(want, "\n")
+	gotLines := strings.Split(got, "\n")
+
+	var b strings.Builder
+
+	max := len(wantLines)
+	if len(gotLines) > max {
+		max = len(gotLines)
+	}
+
+	for i := 0; i < max; i++ {
+		var w, g string
+		if i < len(wantLines) {
+			w = wantLines[i]
+		}
+		if i < len(gotLines) {
+			g = gotLines[i]
+		}
+		if w == g {
+			continue
+		}
+		if i < len(wantLines) {
+			fmt.Fprintf(&b, "  line %d:\n", i+1)
+		} else {
+			fmt.Fprintf(&b, "  line %d (new):\n", i+1)
+		}
+		if w != "" || i < len(wantLines) {
+			fmt.Fprintf(&b, "    - %s\n", w)
+		}
+		if g != "" || i < len(gotLines) {
+			fmt.Fprintf(&b, "    + %s\n", g)
+		}
+	}
+
+	if b.Len() == 0 {
+		return "(no visible differences — possible trailing whitespace/newline mismatch)"
+	}
+	return b.String()
 }
 
 // Run runs the full integration test suite against the given harness.

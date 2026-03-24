@@ -1,17 +1,17 @@
 -- table: mmmigrate_applied
-  version int(11) NOT NULL
+  version int NOT NULL
   name varchar(255) NOT NULL
-  applied_at timestamp NOT NULL DEFAULT current_timestamp()
+  applied_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
 
 -- table: posts
-  id int(11) NOT NULL
-  user_id int(11) NOT NULL
+  id int NOT NULL
+  user_id int NOT NULL
   title text NOT NULL
-  body text DEFAULT NULL
-  published_at text DEFAULT NULL
+  body text
+  published_at text
 
 -- table: users
-  id int(11) NOT NULL
+  id int NOT NULL
   name text NOT NULL
-  email text DEFAULT NULL
+  email text
 
