@@ -11,6 +11,11 @@ type Dialect interface {
 	SelectCurrentChecksum() string
 	InsertApplied() string
 	UpsertCurrent() string
+	// Lock acquires an advisory lock to prevent concurrent migration runs.
+	// Returns empty string if the database handles concurrency natively (e.g. SQLite).
+	Lock() string
+	// Unlock releases the advisory lock. Returns empty string if Lock is a no-op.
+	Unlock() string
 }
 
 var (

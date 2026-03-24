@@ -53,3 +53,7 @@ func (Dialect) UpsertCurrent() string {
 			checksum = EXCLUDED.checksum,
 			applied_at = EXCLUDED.applied_at`
 }
+
+// Lock key: first 8 hex chars of sha256("mmmigrate") = 0x6d4d4d49 = 1833701705
+func (Dialect) Lock() string   { return "SELECT pg_advisory_lock(1833701705)" }
+func (Dialect) Unlock() string { return "SELECT pg_advisory_unlock(1833701705)" }

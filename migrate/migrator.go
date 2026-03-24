@@ -146,8 +146,30 @@ func (m *Migrator) runMigration(ctx context.Context, mig *source.Migration) erro
 	return nil
 }
 
+func (m *Migrator) acquireLock(ctx context.Context) error {
+	if q := m.dialect.Lock(); q != "" {
+		slog.Debug("acquiring migration lock")
+		if _, err := m.db.ExecContext(ctx, q); err != nil {
+			return fmt.Errorf("failed to acquire migration lock: %w", err)
+		}
+	}
+	return nil
+}
+
+func (m *Migrator) releaseLock(ctx context.Context) {
+	if q := m.dialect.Unlock(); q != "" {
+		slog.Debug("releasing migration lock")
+		m.db.ExecContext(ctx, q)
+	}
+}
+
 // Run applies all pending migrations.
 func (m *Migrator) Run(ctx context.Context, migrations []*source.Migration) error {
+	if err := m.acquireLock(ctx); err != nil {
+		return err
+	}
+	defer m.releaseLock(ctx)
+
 	if err := m.ensureMigrationsTable(ctx); err != nil {
 		return err
 	}

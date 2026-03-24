@@ -51,3 +51,7 @@ func (Dialect) UpsertCurrent() string {
 			checksum = excluded.checksum,
 			applied_at = excluded.applied_at`
 }
+
+// SQLite uses file-level locking natively; no advisory lock needed.
+func (Dialect) Lock() string   { return "" }
+func (Dialect) Unlock() string { return "" }
