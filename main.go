@@ -12,14 +12,21 @@ import (
 	"github.com/middle-management/mmmigrate/source"
 )
 
+// version is set via -ldflags="-X main.version=v1.0.0" at build time.
+var version = "dev"
+
 const usage = `Usage: mmmigrate <command> [flags]
 
 Commands:
+  init       Initialize a new migrations directory
   apply      Run all pending migrations
   commit     Commit current.sql to a numbered migration
-  check      Check if current.sql has uncommitted changes
   revert     Revert last committed migration back to current.sql
-  validate   Validate integrity of all migration files
+  status     Show migration status
+  render     Render current.sql with includes expanded (to stdout)
+  check      Check if current.sql has uncommitted changes
+  validate   Validate checksums and chain integrity
+  version    Print version
 
 Flags:
 `
@@ -34,16 +41,24 @@ func main() {
 	args := os.Args[2:]
 
 	switch cmd {
+	case "init":
+		cmdInit(args)
 	case "apply":
 		cmdApply(args)
 	case "commit":
 		cmdCommit(args)
-	case "check":
-		cmdCheck(args)
 	case "revert":
 		cmdRevert(args)
+	case "status":
+		cmdStatus(args)
+	case "render":
+		cmdRender(args)
+	case "check":
+		cmdCheck(args)
 	case "validate":
 		cmdValidate(args)
+	case "version":
+		fmt.Println(version)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n\n", cmd)
 		fmt.Fprint(os.Stderr, usage)
@@ -51,11 +66,23 @@ func main() {
 	}
 }
 
+func cmdInit(args []string) {
+	fs := flag.NewFlagSet("init", flag.ExitOnError)
+	migrationsDir := fs.String("migrations", "migrations", "Path to migrations directory")
+	fs.Parse(args)
+
+	if err := source.Init(*migrationsDir); err != nil {
+		fatal("%v", err)
+	}
+	fmt.Printf("✓ Initialized %s\n", *migrationsDir)
+}
+
 func cmdApply(args []string) {
 	fs := flag.NewFlagSet("apply", flag.ExitOnError)
 	databaseURL := fs.String("database-url", "", "Database connection URL (defaults to DATABASE_URL env var)")
 	migrationsDir := fs.String("migrations", "migrations", "Path to migrations directory")
 	applyCurrent := fs.Bool("current", false, "Also apply current.sql (development mode)")
+	dryRun := fs.Bool("dry-run", false, "Show what would be applied without executing")
 	fs.Parse(args)
 
 	absDir := resolveDir(*migrationsDir)
@@ -63,8 +90,25 @@ func cmdApply(args []string) {
 	defer cleanup()
 
 	ctx := context.Background()
+
+	if *dryRun {
+		pending, err := migrate.DryRun(ctx, db, dialect, absDir, *applyCurrent)
+		if err != nil {
+			fatal("%v", err)
+		}
+		if len(pending) == 0 {
+			fmt.Println("Nothing to apply")
+			return
+		}
+		fmt.Println("Would apply:")
+		for _, name := range pending {
+			fmt.Printf("  %s\n", name)
+		}
+		return
+	}
+
 	if err := migrate.RunMigrations(ctx, db, dialect, absDir, *applyCurrent); err != nil {
-		fatal("failed to run migrations: %v", err)
+		fatal("%v", err)
 	}
 	fmt.Println("✓ Migrations completed successfully")
 }
@@ -98,7 +142,6 @@ func cmdCommit(args []string) {
 		fatal("%v", err)
 	}
 
-	// If a shadow database is configured, verify by replaying from scratch.
 	shadow := *shadowURL
 	if shadow == "" {
 		shadow = os.Getenv("SHADOW_DATABASE_URL")
@@ -118,6 +161,65 @@ func cmdCommit(args []string) {
 	}
 }
 
+func cmdRevert(args []string) {
+	fs := flag.NewFlagSet("revert", flag.ExitOnError)
+	migrationsDir := fs.String("migrations", "migrations", "Path to migrations directory")
+	fs.Parse(args)
+
+	absDir := resolveDir(*migrationsDir)
+	if err := source.RevertLastMigration(absDir); err != nil {
+		fatal("%v", err)
+	}
+}
+
+func cmdStatus(args []string) {
+	fs := flag.NewFlagSet("status", flag.ExitOnError)
+	databaseURL := fs.String("database-url", "", "Database connection URL (defaults to DATABASE_URL env var)")
+	migrationsDir := fs.String("migrations", "migrations", "Path to migrations directory")
+	fs.Parse(args)
+
+	absDir := resolveDir(*migrationsDir)
+	db, cleanup := openDB(*databaseURL)
+	defer cleanup()
+
+	ctx := context.Background()
+	statuses, err := migrate.Status(ctx, db, dialect, absDir)
+	if err != nil {
+		fatal("%v", err)
+	}
+
+	if len(statuses) == 0 {
+		fmt.Println("No migrations found")
+		return
+	}
+
+	for _, s := range statuses {
+		mark := "  "
+		if s.Applied {
+			mark = "✓ "
+		}
+		fmt.Printf("%s%03d_%s\n", mark, s.Version, s.Name)
+	}
+
+	// Also show current.sql status.
+	if err := source.CheckDirtyCurrent(absDir); err != nil {
+		fmt.Println("\ncurrent.sql has uncommitted changes")
+	}
+}
+
+func cmdRender(args []string) {
+	fs := flag.NewFlagSet("render", flag.ExitOnError)
+	migrationsDir := fs.String("migrations", "migrations", "Path to migrations directory")
+	fs.Parse(args)
+
+	absDir := resolveDir(*migrationsDir)
+	rendered, err := source.Render(absDir)
+	if err != nil {
+		fatal("%v", err)
+	}
+	fmt.Print(rendered)
+}
+
 func cmdCheck(args []string) {
 	fs := flag.NewFlagSet("check", flag.ExitOnError)
 	migrationsDir := fs.String("migrations", "migrations", "Path to migrations directory")
@@ -128,17 +230,6 @@ func cmdCheck(args []string) {
 		fatal("%v", err)
 	}
 	fmt.Println("✓ current.sql is clean")
-}
-
-func cmdRevert(args []string) {
-	fs := flag.NewFlagSet("revert", flag.ExitOnError)
-	migrationsDir := fs.String("migrations", "migrations", "Path to migrations directory")
-	fs.Parse(args)
-
-	absDir := resolveDir(*migrationsDir)
-	if err := source.RevertLastMigration(absDir); err != nil {
-		fatal("%v", err)
-	}
 }
 
 func cmdValidate(args []string) {

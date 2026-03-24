@@ -227,6 +227,103 @@ func RunMigrations(ctx context.Context, db *sql.DB, dialect Dialect, migrationsD
 	return migrator.Run(ctx, migrations)
 }
 
+// MigrationStatus describes the state of a single migration.
+type MigrationStatus struct {
+	Version int
+	Name    string
+	Applied bool
+}
+
+// Status returns the state of all migrations relative to the database.
+func Status(ctx context.Context, db *sql.DB, dialect Dialect, migrationsDir string) ([]MigrationStatus, error) {
+	migrator := NewMigrator(db, dialect, migrationsDir, false)
+
+	if err := migrator.ensureMigrationsTable(ctx); err != nil {
+		return nil, err
+	}
+
+	applied, err := migrator.getAppliedMigrations(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	migrations, err := source.LoadMigrations(migrationsDir, false)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load migrations: %w", err)
+	}
+
+	sort.Slice(migrations, func(i, j int) bool {
+		return migrations[i].Version < migrations[j].Version
+	})
+
+	var statuses []MigrationStatus
+	for _, mig := range migrations {
+		_, isApplied := applied[mig.Version]
+		statuses = append(statuses, MigrationStatus{
+			Version: mig.Version,
+			Name:    mig.Name,
+			Applied: isApplied,
+		})
+	}
+
+	return statuses, nil
+}
+
+// DryRun returns the list of migrations that would be applied without executing them.
+func DryRun(ctx context.Context, db *sql.DB, dialect Dialect, migrationsDir string, applyCurrent bool) ([]string, error) {
+	migrator := NewMigrator(db, dialect, migrationsDir, applyCurrent)
+
+	if err := migrator.ensureMigrationsTable(ctx); err != nil {
+		return nil, err
+	}
+
+	applied, err := migrator.getAppliedMigrations(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	migrations, err := source.LoadMigrations(migrationsDir, applyCurrent)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load migrations: %w", err)
+	}
+
+	var pending []string
+
+	var numbered []*source.Migration
+	for _, mig := range migrations {
+		if mig.IsCurrent {
+			if strings.TrimSpace(mig.SQL) != "" {
+				processedSQL, _, err := source.ProcessIncludes(mig.SQL, migrationsDir)
+				if err != nil {
+					return nil, err
+				}
+				checksum := fmt.Sprintf("%x", sha256.Sum256([]byte(processedSQL)))
+				currentChecksum, _ := migrator.getCurrentChecksum(ctx)
+				if checksum != currentChecksum {
+					pending = append(pending, "current.sql")
+				}
+			}
+		} else {
+			numbered = append(numbered, mig)
+		}
+	}
+
+	sort.Slice(numbered, func(i, j int) bool {
+		return numbered[i].Version < numbered[j].Version
+	})
+
+	// Prepend numbered migrations before current.sql.
+	var result []string
+	for _, mig := range numbered {
+		if _, ok := applied[mig.Version]; !ok {
+			result = append(result, fmt.Sprintf("%03d_%s.sql", mig.Version, mig.Name))
+		}
+	}
+	result = append(result, pending...)
+
+	return result, nil
+}
+
 // VerifyAgainstShadow resets a shadow database and replays all migrations plus
 // current.sql from scratch, verifying the full chain works on a clean database.
 func VerifyAgainstShadow(ctx context.Context, shadowDB *sql.DB, dialect Dialect, migrationsDir string) error {

@@ -14,6 +14,39 @@ import (
 //go:embed current.sql.template
 var emptyCurrentSQLTemplate string
 
+// Init creates the migrations directory and an empty current.sql file.
+func Init(migrationsDir string) error {
+	if err := os.MkdirAll(migrationsDir, 0755); err != nil {
+		return fmt.Errorf("failed to create migrations directory: %w", err)
+	}
+
+	currentPath := filepath.Join(migrationsDir, "current.sql")
+	if _, err := os.Stat(currentPath); err == nil {
+		return fmt.Errorf("migrations directory already initialized (%s exists)", currentPath)
+	}
+
+	if err := os.WriteFile(currentPath, []byte(emptyCurrentSQLTemplate), 0644); err != nil {
+		return fmt.Errorf("failed to write current.sql: %w", err)
+	}
+
+	return nil
+}
+
+// Render expands @include directives in current.sql and returns the result.
+func Render(migrationsDir string) (string, error) {
+	content, err := os.ReadFile(filepath.Join(migrationsDir, "current.sql"))
+	if err != nil {
+		return "", fmt.Errorf("failed to read current.sql: %w", err)
+	}
+
+	processed, _, err := ProcessIncludes(string(content), migrationsDir)
+	if err != nil {
+		return "", fmt.Errorf("failed to process includes: %w", err)
+	}
+
+	return processed, nil
+}
+
 // CommitCurrentMigration converts current.sql to a numbered migration file.
 func CommitCurrentMigration(migrationsDir string, description string) error {
 	currentPath := filepath.Join(migrationsDir, "current.sql")

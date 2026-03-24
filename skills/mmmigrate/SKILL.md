@@ -34,11 +34,15 @@ edit current.sql → apply -current (dev, iterate) → commit → apply (prod)
 
 | Command | Needs DB | Purpose |
 |---------|----------|---------|
-| `apply [-current]` | yes | Run pending migrations. `-current` also applies current.sql |
+| `init` | no | Create migrations directory and empty current.sql |
+| `apply [-current] [-dry-run]` | yes | Run pending migrations. `-current` includes current.sql, `-dry-run` shows what would run |
 | `commit -description "..."` | yes | Test and commit current.sql as numbered migration |
 | `revert` | no | Uncommit last migration back to current.sql (files only) |
+| `status` | yes | Show which migrations are applied/pending |
+| `render` | no | Print current.sql with includes expanded (useful for piping to psql) |
 | `check` | no | Verify current.sql has no uncommitted changes (CI gate) |
 | `validate` | no | Verify checksums and merkle chain of all migrations |
+| `version` | no | Print version |
 
 All commands accept `-migrations DIR` (default: `migrations`). DB commands accept `-database-url URL` (default: `DATABASE_URL` env).
 
