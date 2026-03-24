@@ -111,6 +111,7 @@ func Run(t *testing.T, h Harness) {
 	t.Run("TestCurrentRollback", func(t *testing.T) { testTestCurrent(t, h) })
 	t.Run("TestCurrentRejectsInvalid", func(t *testing.T) { testTestCurrentInvalid(t, h) })
 	t.Run("EmptyDir", func(t *testing.T) { testEmptyDir(t, h) })
+	t.Run("ShadowVerification", func(t *testing.T) { testShadow(t, h) })
 }
 
 // testSchema runs the fixture migrations (without current.sql) and compares
@@ -223,6 +224,22 @@ func testTestCurrentInvalid(t *testing.T, h Harness) {
 	if err := migrate.TestCurrentMigration(ctx, db, dir); err == nil {
 		t.Error("expected error for invalid SQL")
 	}
+}
+
+func testShadow(t *testing.T, h Harness) {
+	shadowDB := h.OpenDB(t)
+	dir := SetupFixtures(t)
+
+	ctx := context.Background()
+	d := h.Dialect(t)
+
+	if err := migrate.VerifyAgainstShadow(ctx, shadowDB, d, dir); err != nil {
+		t.Fatalf("shadow verification failed: %v", err)
+	}
+
+	// Verify the shadow has the expected schema.
+	got := h.DumpSchema(t, shadowDB)
+	CompareGolden(t, got, filepath.Join("testdata", "schema_with_current.golden.sql"))
 }
 
 func testEmptyDir(t *testing.T, h Harness) {

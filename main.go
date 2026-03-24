@@ -72,6 +72,7 @@ func cmdApply(args []string) {
 func cmdCommit(args []string) {
 	fs := flag.NewFlagSet("commit", flag.ExitOnError)
 	databaseURL := fs.String("database-url", "", "Database connection URL (defaults to DATABASE_URL env var)")
+	shadowURL := fs.String("shadow-url", "", "Shadow database URL for full replay verification (defaults to SHADOW_DATABASE_URL env var)")
 	migrationsDir := fs.String("migrations", "migrations", "Path to migrations directory")
 	description := fs.String("description", "", "Description for the committed migration (required)")
 	fs.Parse(args)
@@ -95,6 +96,26 @@ func cmdCommit(args []string) {
 
 	if err := source.CommitCurrentMigration(absDir, *description); err != nil {
 		fatal("%v", err)
+	}
+
+	// If a shadow database is configured, verify by replaying from scratch.
+	shadow := *shadowURL
+	if shadow == "" {
+		shadow = os.Getenv("SHADOW_DATABASE_URL")
+	}
+	if shadow != "" {
+		dialect := migrate.DefaultDialect()
+		shadowDB, err := sql.Open(dialect.DriverName(), shadow)
+		if err != nil {
+			fatal("failed to open shadow database: %v", err)
+		}
+		defer shadowDB.Close()
+
+		fmt.Println("Verifying full migration chain against shadow database...")
+		if err := migrate.VerifyAgainstShadow(ctx, shadowDB, dialect, absDir); err != nil {
+			fatal("shadow verification failed: %v", err)
+		}
+		fmt.Println("✓ Shadow database verification passed")
 	}
 }
 

@@ -227,6 +227,22 @@ func RunMigrations(ctx context.Context, db *sql.DB, dialect Dialect, migrationsD
 	return migrator.Run(ctx, migrations)
 }
 
+// VerifyAgainstShadow resets a shadow database and replays all migrations plus
+// current.sql from scratch, verifying the full chain works on a clean database.
+func VerifyAgainstShadow(ctx context.Context, shadowDB *sql.DB, dialect Dialect, migrationsDir string) error {
+	slog.Info("resetting shadow database")
+	if _, err := shadowDB.ExecContext(ctx, dialect.ResetSQL()); err != nil {
+		return fmt.Errorf("failed to reset shadow database: %w", err)
+	}
+
+	slog.Info("replaying all migrations on shadow database")
+	if err := RunMigrations(ctx, shadowDB, dialect, migrationsDir, true); err != nil {
+		return fmt.Errorf("shadow replay failed: %w", err)
+	}
+
+	return nil
+}
+
 // TestCurrentMigration applies current.sql in a transaction and rolls it back,
 // verifying the SQL is valid without making permanent changes.
 func TestCurrentMigration(ctx context.Context, db *sql.DB, migrationsDir string) error {

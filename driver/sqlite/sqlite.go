@@ -55,3 +55,13 @@ func (Dialect) UpsertCurrent() string {
 // SQLite uses file-level locking natively; no advisory lock needed.
 func (Dialect) Lock() string   { return "" }
 func (Dialect) Unlock() string { return "" }
+
+func (Dialect) ResetSQL() string {
+	// SQLite has no DROP ALL; we drop each table individually via a pragma trick.
+	// This is executed as a single statement, so we use a simple approach.
+	return `
+		PRAGMA writable_schema = 1;
+		DELETE FROM sqlite_master WHERE type IN ('table', 'view', 'index', 'trigger');
+		PRAGMA writable_schema = 0;
+		VACUUM`
+}

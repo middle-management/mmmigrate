@@ -16,6 +16,9 @@ type Dialect interface {
 	Lock() string
 	// Unlock releases the advisory lock. Returns empty string if Lock is a no-op.
 	Unlock() string
+	// ResetSQL returns SQL that drops all user objects so the database can be
+	// replayed from scratch. Used by shadow database verification.
+	ResetSQL() string
 }
 
 var (
