@@ -359,6 +359,107 @@ func TestChainDetectsTamperingMiddle(t *testing.T) {
 	}
 }
 
+// --- Revert ---
+
+func TestRevertLastMigration(t *testing.T) {
+	dir := t.TempDir()
+
+	commitMigration(t, dir, `CREATE TABLE a (id INTEGER);`, "first")
+	commitMigration(t, dir, `CREATE TABLE b (id INTEGER);`, "second")
+
+	if err := source.RevertLastMigration(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	// current.sql should contain the reverted content.
+	current, _ := os.ReadFile(filepath.Join(dir, "current.sql"))
+	if !strings.Contains(string(current), "CREATE TABLE b") {
+		t.Error("current.sql should contain the reverted migration SQL")
+	}
+
+	// 002 should be gone.
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "002_") {
+			t.Error("002 migration file should be deleted after revert")
+		}
+	}
+
+	// 001 should still exist.
+	var has001 bool
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "001_") {
+			has001 = true
+		}
+	}
+	if !has001 {
+		t.Error("001 migration should still exist")
+	}
+}
+
+func TestRevertRestoresIncludes(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create an include file and a current.sql that uses it.
+	funcDir := filepath.Join(dir, "functions")
+	os.MkdirAll(funcDir, 0755)
+	writeSQL(t, funcDir, "helper.sql", "CREATE TABLE helper (id INTEGER);")
+
+	writeSQL(t, dir, "current.sql", "CREATE TABLE main (id INTEGER);\n-- @include functions/helper.sql\n")
+	if err := source.CommitCurrentMigration(dir, "with includes"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := source.RevertLastMigration(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	current, _ := os.ReadFile(filepath.Join(dir, "current.sql"))
+	s := string(current)
+
+	if !strings.Contains(s, "-- @include functions/helper.sql") {
+		t.Error("reverted current.sql should restore @include directives")
+	}
+	if strings.Contains(s, "-- BEGIN INCLUDE:") {
+		t.Error("reverted current.sql should not contain compiled include markers")
+	}
+	if strings.Contains(s, "CREATE TABLE helper") {
+		t.Error("reverted current.sql should not contain inlined include content")
+	}
+	if !strings.Contains(s, "CREATE TABLE main") {
+		t.Error("reverted current.sql should contain non-included SQL")
+	}
+}
+
+func TestRevertFailsWithDirtyCurrent(t *testing.T) {
+	dir := t.TempDir()
+
+	commitMigration(t, dir, `CREATE TABLE a (id INTEGER);`, "first")
+
+	// Make current.sql dirty.
+	writeSQL(t, dir, "current.sql", "ALTER TABLE a ADD COLUMN x TEXT;")
+
+	err := source.RevertLastMigration(dir)
+	if err == nil {
+		t.Fatal("expected error when current.sql is dirty")
+	}
+	if !strings.Contains(err.Error(), "cannot revert") {
+		t.Errorf("expected 'cannot revert' error, got: %v", err)
+	}
+}
+
+func TestRevertFailsWithNoMigrations(t *testing.T) {
+	dir := t.TempDir()
+
+	err := source.RevertLastMigration(dir)
+	if err == nil {
+		t.Fatal("expected error with no migrations")
+	}
+	if !strings.Contains(err.Error(), "no migrations to revert") {
+		t.Errorf("expected 'no migrations' error, got: %v", err)
+	}
+}
+
 func TestChainEmptyDir(t *testing.T) {
 	dir := t.TempDir()
 

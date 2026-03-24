@@ -18,6 +18,7 @@ Commands:
   apply      Run all pending migrations
   commit     Commit current.sql to a numbered migration
   check      Check if current.sql has uncommitted changes
+  revert     Revert last committed migration back to current.sql
   validate   Validate integrity of all migration files
 
 Flags:
@@ -39,6 +40,8 @@ func main() {
 		cmdCommit(args)
 	case "check":
 		cmdCheck(args)
+	case "revert":
+		cmdRevert(args)
 	case "validate":
 		cmdValidate(args)
 	default:
@@ -105,6 +108,17 @@ func cmdCheck(args []string) {
 		fatal("%v", err)
 	}
 	fmt.Println("✓ current.sql is clean")
+}
+
+func cmdRevert(args []string) {
+	fs := flag.NewFlagSet("revert", flag.ExitOnError)
+	migrationsDir := fs.String("migrations", "migrations", "Path to migrations directory")
+	fs.Parse(args)
+
+	absDir := resolveDir(*migrationsDir)
+	if err := source.RevertLastMigration(absDir); err != nil {
+		fatal("%v", err)
+	}
 }
 
 func cmdValidate(args []string) {

@@ -117,6 +117,83 @@ func CheckDirtyCurrent(migrationsDir string) error {
 	return nil
 }
 
+// RevertLastMigration converts the last committed migration back to current.sql,
+// restoring @include directives from the compiled include markers.
+func RevertLastMigration(migrationsDir string) error {
+	// Ensure current.sql is clean before reverting.
+	if err := CheckDirtyCurrent(migrationsDir); err != nil {
+		return fmt.Errorf("cannot revert: %w", err)
+	}
+
+	files, err := listMigrationFiles(migrationsDir)
+	if err != nil {
+		return err
+	}
+	if len(files) == 0 {
+		return fmt.Errorf("no migrations to revert")
+	}
+
+	last := files[len(files)-1]
+	path := filepath.Join(migrationsDir, last.filename)
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("failed to read %s: %w", last.filename, err)
+	}
+
+	body := extractBody(string(content))
+	restored := decompileIncludes(body)
+
+	currentPath := filepath.Join(migrationsDir, "current.sql")
+	if err := atomicWriteFile(currentPath, []byte(restored)); err != nil {
+		return fmt.Errorf("failed to write current.sql: %w", err)
+	}
+
+	if err := os.Remove(path); err != nil {
+		return fmt.Errorf("failed to remove %s: %w", last.filename, err)
+	}
+
+	fmt.Printf("✓ Reverted %s to current.sql\n", last.filename)
+	return nil
+}
+
+var beginIncludePrefix = "-- BEGIN INCLUDE: "
+var endIncludePrefix = "-- END INCLUDE: "
+
+// decompileIncludes replaces compiled include blocks with @include directives.
+func decompileIncludes(body string) string {
+	lines := strings.Split(body, "\n")
+	var result []string
+
+	for i := 0; i < len(lines); i++ {
+		trimmed := strings.TrimSpace(lines[i])
+
+		if !strings.HasPrefix(trimmed, beginIncludePrefix) {
+			result = append(result, lines[i])
+			continue
+		}
+
+		// Extract the include path from "-- BEGIN INCLUDE: path [checksum: ...]"
+		rest := strings.TrimPrefix(trimmed, beginIncludePrefix)
+		path := rest
+		if idx := strings.Index(rest, " ["); idx >= 0 {
+			path = rest[:idx]
+		}
+
+		result = append(result, "-- @include "+path)
+
+		// Skip lines until the matching END INCLUDE.
+		endMarker := endIncludePrefix + path
+		for i++; i < len(lines); i++ {
+			if strings.TrimSpace(lines[i]) == endMarker {
+				break
+			}
+		}
+	}
+
+	return strings.Join(result, "\n")
+}
+
 // migrationHeaders holds values extracted from a migration file header.
 type migrationHeaders struct {
 	Checksum  string
