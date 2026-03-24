@@ -12,17 +12,12 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        include:
-          - goos: linux
-            goarch: amd64
-          - goos: linux
-            goarch: arm64
-          - goos: darwin
-            goarch: amd64
-          - goos: darwin
-            goarch: arm64
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+        driver: [sqlite, postgres]
+        exclude:
           - goos: windows
-            goarch: amd64
+            goarch: arm64
 
     steps:
       - uses: actions/checkout@v4
@@ -30,24 +25,20 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Build binaries
+      - name: Build
+        run: |
+          ext=""; if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
+          name="mmmigrate-${DRIVER}-${GOOS}-${GOARCH}${ext}"
+          go build -tags "${DRIVER}" -ldflags="-s -w" -o "dist/${name}" .
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-        run: |
-          ext=""
-          if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
+          DRIVER: ${{ matrix.driver }}
 
-          for driver in sqlite postgres; do
-            name="mmmigrate-${driver}-${GOOS}-${GOARCH}${ext}"
-            echo "Building ${name}"
-            go build -tags "${driver}" -ldflags="-s -w" -o "dist/${name}" .
-          done
-
-      - name: Upload artifacts
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: binaries-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: mmmigrate-${{ matrix.driver }}-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/
 
   publish:
