@@ -1,4 +1,4 @@
-package migrate
+package source
 
 import (
 	"crypto/sha256"
@@ -19,13 +19,12 @@ type IncludeInfo struct {
 
 var includeRegex = regexp.MustCompile(`^\s*--\s*@include\s+(.+?)\s*$`)
 
-// processIncludes recursively processes include directives in SQL content.
-func processIncludes(content string, baseDir string) (string, []IncludeInfo, error) {
-	return processIncludesRecursive(content, baseDir, make(map[string]bool), []IncludeInfo{})
+// ProcessIncludes recursively expands @include directives in SQL content.
+func ProcessIncludes(content string, baseDir string) (string, []IncludeInfo, error) {
+	return processIncludesRecursive(content, baseDir, make(map[string]bool), nil)
 }
 
-// processIncludesRecursive handles include processing with cycle detection.
-func processIncludesRecursive(content string, baseDir string, visiting map[string]bool, includeInfos []IncludeInfo) (string, []IncludeInfo, error) {
+func processIncludesRecursive(content string, baseDir string, visiting map[string]bool, infos []IncludeInfo) (string, []IncludeInfo, error) {
 	lines := strings.Split(content, "\n")
 	result := make([]string, 0, len(lines))
 
@@ -57,7 +56,7 @@ func processIncludesRecursive(content string, baseDir string, visiting map[strin
 
 		visiting[absPath] = true
 
-		processedIncludeContent, nestedIncludeInfos, err := processIncludesRecursive(string(includeContent), baseDir, visiting, includeInfos)
+		processedContent, nestedInfos, err := processIncludesRecursive(string(includeContent), baseDir, visiting, infos)
 		if err != nil {
 			return "", nil, err
 		}
@@ -65,22 +64,22 @@ func processIncludesRecursive(content string, baseDir string, visiting map[strin
 		delete(visiting, absPath)
 
 		startLine := len(result) + 1
-		includeLines := strings.Split(processedIncludeContent, "\n")
+		includeLines := strings.Split(processedContent, "\n")
 		endLine := startLine + len(includeLines) + 1
 
-		includeInfo := IncludeInfo{
+		info := IncludeInfo{
 			Path:      includePath,
 			Checksum:  checksum[:8],
 			StartLine: startLine,
 			EndLine:   endLine,
 		}
 
-		result = append(result, fmt.Sprintf("-- BEGIN INCLUDE: %s [checksum: %s]", includePath, includeInfo.Checksum))
+		result = append(result, fmt.Sprintf("-- BEGIN INCLUDE: %s [checksum: %s]", includePath, info.Checksum))
 		result = append(result, includeLines...)
 		result = append(result, fmt.Sprintf("-- END INCLUDE: %s", includePath))
 
-		includeInfos = append(nestedIncludeInfos, includeInfo)
+		infos = append(nestedInfos, info)
 	}
 
-	return strings.Join(result, "\n"), includeInfos, nil
+	return strings.Join(result, "\n"), infos, nil
 }

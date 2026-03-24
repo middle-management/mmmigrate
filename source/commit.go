@@ -1,4 +1,4 @@
-package migrate
+package source
 
 import (
 	"crypto/sha256"
@@ -40,7 +40,7 @@ func CommitCurrentMigration(migrationsDir string, description string) error {
 		return fmt.Errorf("current.sql contains only comments, nothing to commit")
 	}
 
-	processedContent, includeInfos, err := processIncludes(string(content), migrationsDir)
+	processedContent, includeInfos, err := ProcessIncludes(string(content), migrationsDir)
 	if err != nil {
 		return fmt.Errorf("failed to process includes: %w", err)
 	}
@@ -104,9 +104,8 @@ func ValidateMigrationIntegrity(filePath string) error {
 
 	lines := strings.Split(string(content), "\n")
 	var expectedChecksum string
-	var migrationContent strings.Builder
 
-	headerEnd := false
+	contentStart := 0
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 
@@ -117,16 +116,9 @@ func ValidateMigrationIntegrity(filePath string) error {
 			}
 		}
 
-		if !headerEnd && trimmed == "--" {
-			headerEnd = true
-			continue
-		}
-
-		if headerEnd {
-			if i > 0 {
-				migrationContent.WriteString("\n")
-			}
-			migrationContent.WriteString(line)
+		if trimmed != "" && !strings.HasPrefix(trimmed, "--") {
+			contentStart = i
+			break
 		}
 	}
 
@@ -134,7 +126,8 @@ func ValidateMigrationIntegrity(filePath string) error {
 		return nil
 	}
 
-	actualChecksum := fmt.Sprintf("%x", sha256.Sum256([]byte(migrationContent.String())))
+	body := strings.Join(lines[contentStart:], "\n")
+	actualChecksum := fmt.Sprintf("%x", sha256.Sum256([]byte(body)))
 
 	if expectedChecksum != actualChecksum {
 		return fmt.Errorf("migration integrity check failed: expected %s, got %s",

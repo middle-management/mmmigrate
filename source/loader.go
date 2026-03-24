@@ -1,4 +1,4 @@
-package migrate
+package source
 
 import (
 	"fmt"
@@ -8,11 +8,11 @@ import (
 	"strings"
 )
 
-// LoadMigrations reads all .sql files from the filesystem.
-func LoadMigrations(migrationsDir string, loadCurrent bool) ([]*Migration, error) {
+// LoadMigrations reads all .sql files from the migrations directory.
+func LoadMigrations(dir string, loadCurrent bool) ([]*Migration, error) {
 	var migrations []*Migration
 
-	entries, err := os.ReadDir(migrationsDir)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read migrations directory: %w", err)
 	}
@@ -27,7 +27,7 @@ func LoadMigrations(migrationsDir string, loadCurrent bool) ([]*Migration, error
 				continue
 			}
 
-			content, err := os.ReadFile(filepath.Join(migrationsDir, entry.Name()))
+			content, err := os.ReadFile(filepath.Join(dir, entry.Name()))
 			if err != nil {
 				return nil, fmt.Errorf("failed to read current.sql: %w", err)
 			}
@@ -46,16 +46,15 @@ func LoadMigrations(migrationsDir string, loadCurrent bool) ([]*Migration, error
 			return nil, fmt.Errorf("failed to parse migration name %s: %w", entry.Name(), err)
 		}
 
-		content, err := os.ReadFile(filepath.Join(migrationsDir, entry.Name()))
+		content, err := os.ReadFile(filepath.Join(dir, entry.Name()))
 		if err != nil {
 			return nil, fmt.Errorf("failed to read migration file %s: %w", entry.Name(), err)
 		}
 
 		migrations = append(migrations, &Migration{
-			Version:   version,
-			Name:      name,
-			SQL:       string(content),
-			IsCurrent: false,
+			Version: version,
+			Name:    name,
+			SQL:     string(content),
 		})
 	}
 
