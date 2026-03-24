@@ -16,6 +16,17 @@ func writeSQL(t *testing.T, dir, name, content string) {
 	}
 }
 
+// commitMigration is a helper that writes current.sql and commits it.
+func commitMigration(t *testing.T, dir, sql, desc string) {
+	t.Helper()
+	writeSQL(t, dir, "current.sql", sql)
+	if err := source.CommitCurrentMigration(dir, desc); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// --- ParseMigrationName ---
+
 func TestParseMigrationName(t *testing.T) {
 	tests := []struct {
 		filename    string
@@ -41,6 +52,8 @@ func TestParseMigrationName(t *testing.T) {
 	}
 }
 
+// --- LoadMigrations ---
+
 func TestLoadMigrations(t *testing.T) {
 	dir := t.TempDir()
 
@@ -65,32 +78,52 @@ func TestLoadMigrations(t *testing.T) {
 	}
 }
 
+func TestLoadMigrationsDuplicateVersion(t *testing.T) {
+	dir := t.TempDir()
+
+	writeSQL(t, dir, "001_first.sql", "SELECT 1;")
+	writeSQL(t, dir, "001_second.sql", "SELECT 2;")
+
+	_, err := source.LoadMigrations(dir, false)
+	if err == nil {
+		t.Fatal("expected error for duplicate version")
+	}
+	if !strings.Contains(err.Error(), "duplicate migration version") {
+		t.Errorf("expected duplicate version error, got: %v", err)
+	}
+}
+
+// --- CommitCurrentMigration ---
+
 func TestCommitCurrentMigration(t *testing.T) {
 	dir := t.TempDir()
 
 	writeSQL(t, dir, "current.sql", `CREATE TABLE orders (id INTEGER PRIMARY KEY);`)
-	writeSQL(t, dir, "current.sql.template", "-- empty\n")
 
 	if err := source.CommitCurrentMigration(dir, "create orders table"); err != nil {
 		t.Fatal(err)
 	}
 
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	entries, _ := os.ReadDir(dir)
 	var found bool
 	for _, e := range entries {
 		if strings.HasPrefix(e.Name(), "001_") && strings.HasSuffix(e.Name(), ".sql") {
 			found = true
 			content, _ := os.ReadFile(filepath.Join(dir, e.Name()))
-			if !strings.Contains(string(content), "CREATE TABLE orders") {
+			s := string(content)
+			if !strings.Contains(s, "CREATE TABLE orders") {
 				t.Error("committed migration should contain the original SQL")
 			}
-			if !strings.Contains(string(content), "-- Checksum:") {
+			if !strings.Contains(s, "-- Checksum:") {
 				t.Error("committed migration should contain a checksum header")
 			}
+			if !strings.Contains(s, "-- Chain:") {
+				t.Error("committed migration should contain a chain header")
+			}
+		}
+		// No temp files left behind.
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			t.Errorf("temp file left behind: %s", e.Name())
 		}
 	}
 	if !found {
@@ -126,6 +159,8 @@ func TestCommitIncrementsVersion(t *testing.T) {
 	}
 }
 
+// --- CheckDirtyCurrent ---
+
 func TestCheckDirtyCurrent(t *testing.T) {
 	dir := t.TempDir()
 
@@ -147,13 +182,12 @@ func TestCheckDirtyCurrentMissingFile(t *testing.T) {
 	}
 }
 
+// --- ValidateMigrationIntegrity ---
+
 func TestValidateMigrationIntegrity(t *testing.T) {
 	dir := t.TempDir()
 
-	writeSQL(t, dir, "current.sql", `CREATE TABLE valid (id INTEGER);`)
-	if err := source.CommitCurrentMigration(dir, "valid migration"); err != nil {
-		t.Fatal(err)
-	}
+	commitMigration(t, dir, `CREATE TABLE valid (id INTEGER);`, "valid migration")
 
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
@@ -167,6 +201,7 @@ func TestValidateMigrationIntegrity(t *testing.T) {
 			t.Errorf("expected valid integrity: %v", err)
 		}
 
+		// Tamper with content.
 		content, _ := os.ReadFile(path)
 		tampered := strings.Replace(string(content), "CREATE TABLE valid", "CREATE TABLE tampered", 1)
 		os.WriteFile(path, []byte(tampered), 0644)
@@ -176,6 +211,34 @@ func TestValidateMigrationIntegrity(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateMigrationIntegrityMissingChecksum(t *testing.T) {
+	dir := t.TempDir()
+
+	// A file with migration headers but no Checksum line.
+	writeSQL(t, dir, "001_bad.sql", "-- Migration: bad\n-- Created: 2026-01-01\n--\nSELECT 1;\n")
+
+	err := source.ValidateMigrationIntegrity(filepath.Join(dir, "001_bad.sql"))
+	if err == nil {
+		t.Error("expected error for missing checksum with headers present")
+	}
+	if !strings.Contains(err.Error(), "missing checksum") {
+		t.Errorf("expected missing checksum error, got: %v", err)
+	}
+}
+
+func TestValidatePlainSQLFileOK(t *testing.T) {
+	dir := t.TempDir()
+
+	// A plain SQL file with no migration headers should pass.
+	writeSQL(t, dir, "001_plain.sql", "CREATE TABLE foo (id INTEGER);\n")
+
+	if err := source.ValidateMigrationIntegrity(filepath.Join(dir, "001_plain.sql")); err != nil {
+		t.Errorf("plain SQL file should pass validation: %v", err)
+	}
+}
+
+// --- Include processing ---
 
 func TestIncludeProcessing(t *testing.T) {
 	dir := t.TempDir()
@@ -212,5 +275,94 @@ func TestIncludeCircularDetection(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "circular") {
 		t.Errorf("expected circular include error, got: %v", err)
+	}
+}
+
+func TestIncludePathTraversal(t *testing.T) {
+	dir := t.TempDir()
+
+	_, _, err := source.ProcessIncludes("-- @include ../../../etc/passwd", dir)
+	if err == nil {
+		t.Fatal("expected error for path traversal")
+	}
+	if !strings.Contains(err.Error(), "escapes base directory") {
+		t.Errorf("expected path traversal error, got: %v", err)
+	}
+}
+
+// --- Merkle chain ---
+
+func TestChainValidation(t *testing.T) {
+	dir := t.TempDir()
+
+	commitMigration(t, dir, `CREATE TABLE a (id INTEGER);`, "first")
+	commitMigration(t, dir, `CREATE TABLE b (id INTEGER);`, "second")
+	commitMigration(t, dir, `CREATE TABLE c (id INTEGER);`, "third")
+
+	// Chain should validate.
+	if err := source.ValidateChain(dir); err != nil {
+		t.Fatalf("expected valid chain: %v", err)
+	}
+}
+
+func TestChainDetectsTamperingFirst(t *testing.T) {
+	dir := t.TempDir()
+
+	commitMigration(t, dir, `CREATE TABLE a (id INTEGER);`, "first")
+	commitMigration(t, dir, `CREATE TABLE b (id INTEGER);`, "second")
+
+	// Tamper with the first migration's body.
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "001_") {
+			path := filepath.Join(dir, e.Name())
+			content, _ := os.ReadFile(path)
+			tampered := strings.Replace(string(content), "CREATE TABLE a", "CREATE TABLE hacked", 1)
+			os.WriteFile(path, []byte(tampered), 0644)
+		}
+	}
+
+	err := source.ValidateChain(dir)
+	if err == nil {
+		t.Fatal("expected chain validation to fail after tampering")
+	}
+	if !strings.Contains(err.Error(), "001_") {
+		t.Errorf("expected error to reference first migration, got: %v", err)
+	}
+}
+
+func TestChainDetectsTamperingMiddle(t *testing.T) {
+	dir := t.TempDir()
+
+	commitMigration(t, dir, `CREATE TABLE a (id INTEGER);`, "first")
+	commitMigration(t, dir, `CREATE TABLE b (id INTEGER);`, "second")
+	commitMigration(t, dir, `CREATE TABLE c (id INTEGER);`, "third")
+
+	// Tamper with the second migration. The checksum still matches (we update it)
+	// but the chain should break at migration 3.
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), "002_") {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		content, _ := os.ReadFile(path)
+		s := string(content)
+		// Replace the body and fix the checksum to match, but the chain will break.
+		s = strings.Replace(s, "CREATE TABLE b", "CREATE TABLE hacked", 1)
+		os.WriteFile(path, []byte(s), 0644)
+	}
+
+	err := source.ValidateChain(dir)
+	if err == nil {
+		t.Fatal("expected chain validation to fail")
+	}
+}
+
+func TestChainEmptyDir(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := source.ValidateChain(dir); err != nil {
+		t.Fatalf("expected no error for empty dir: %v", err)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -47,7 +48,14 @@ func CommitCurrentMigration(migrationsDir string, description string) error {
 
 	contentChecksum := fmt.Sprintf("%x", sha256.Sum256([]byte(processedContent)))
 
-	header := buildMigrationHeader(description, contentChecksum, includeInfos)
+	// Compute chain hash from existing migrations.
+	prevChain, err := getLastChainHash(migrationsDir)
+	if err != nil {
+		return fmt.Errorf("failed to read chain: %w", err)
+	}
+	chainHash := computeChainHash(prevChain, contentChecksum)
+
+	header := buildMigrationHeader(description, contentChecksum, chainHash, includeInfos)
 	finalContent := header + "\n" + processedContent
 
 	nextVersion, err := getNextMigrationVersion(migrationsDir)
@@ -58,17 +66,31 @@ func CommitCurrentMigration(migrationsDir string, description string) error {
 	filename := fmt.Sprintf("%03d_%s.sql", nextVersion, sanitizeDescription(description))
 	newPath := filepath.Join(migrationsDir, filename)
 
-	if err := os.WriteFile(newPath, []byte(finalContent), 0644); err != nil {
-		return fmt.Errorf("failed to write new migration file: %w", err)
+	// Write atomically via temp file + rename.
+	if err := atomicWriteFile(newPath, []byte(finalContent)); err != nil {
+		return fmt.Errorf("failed to write migration file: %w", err)
 	}
 
-	if err := os.WriteFile(currentPath, []byte(emptyCurrentSQLTemplate), 0644); err != nil {
+	if err := atomicWriteFile(currentPath, []byte(emptyCurrentSQLTemplate)); err != nil {
 		return fmt.Errorf("failed to clear current.sql: %w", err)
 	}
 
 	fmt.Printf("✓ Committed current.sql as %s\n", filename)
 	fmt.Printf("✓ Cleared current.sql\n")
 
+	return nil
+}
+
+// atomicWriteFile writes data to a temp file then renames it into place.
+func atomicWriteFile(path string, data []byte) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return err
+	}
 	return nil
 }
 
@@ -95,6 +117,50 @@ func CheckDirtyCurrent(migrationsDir string) error {
 	return nil
 }
 
+// migrationHeaders holds values extracted from a migration file header.
+type migrationHeaders struct {
+	Checksum  string
+	Chain     string
+	HasHeader bool // true if any migration header lines (Migration:, Created:) were found
+}
+
+// extractHeaders parses the comment header of a migration file.
+func extractHeaders(content string) migrationHeaders {
+	var h migrationHeaders
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+
+		switch {
+		case strings.HasPrefix(trimmed, "-- Migration:"), strings.HasPrefix(trimmed, "-- Created:"):
+			h.HasHeader = true
+		case strings.HasPrefix(trimmed, "-- Checksum:"):
+			h.HasHeader = true
+			if parts := strings.SplitN(trimmed, ":", 2); len(parts) == 2 {
+				h.Checksum = strings.TrimSpace(parts[1])
+			}
+		case strings.HasPrefix(trimmed, "-- Chain:"):
+			if parts := strings.SplitN(trimmed, ":", 2); len(parts) == 2 {
+				h.Chain = strings.TrimSpace(parts[1])
+			}
+		case trimmed != "" && !strings.HasPrefix(trimmed, "--"):
+			return h // end of header
+		}
+	}
+	return h
+}
+
+// extractBody returns the migration content after the comment header.
+func extractBody(content string) string {
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" && !strings.HasPrefix(trimmed, "--") {
+			return strings.Join(lines[i:], "\n")
+		}
+	}
+	return ""
+}
+
 // ValidateMigrationIntegrity checks if a migration file's content matches its checksum.
 func ValidateMigrationIntegrity(filePath string) error {
 	content, err := os.ReadFile(filePath)
@@ -102,64 +168,135 @@ func ValidateMigrationIntegrity(filePath string) error {
 		return fmt.Errorf("failed to read migration file: %w", err)
 	}
 
-	lines := strings.Split(string(content), "\n")
-	var expectedChecksum string
+	h := extractHeaders(string(content))
 
-	contentStart := 0
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-
-		if strings.HasPrefix(trimmed, "-- Checksum:") {
-			parts := strings.SplitN(trimmed, ":", 2)
-			if len(parts) == 2 {
-				expectedChecksum = strings.TrimSpace(parts[1])
-			}
+	if h.Checksum == "" {
+		if h.HasHeader {
+			return fmt.Errorf("migration has headers but missing checksum")
 		}
-
-		if trimmed != "" && !strings.HasPrefix(trimmed, "--") {
-			contentStart = i
-			break
-		}
+		return nil // plain SQL file without migration headers
 	}
 
-	if expectedChecksum == "" {
-		return nil
-	}
+	body := extractBody(string(content))
+	actual := fmt.Sprintf("%x", sha256.Sum256([]byte(body)))
 
-	body := strings.Join(lines[contentStart:], "\n")
-	actualChecksum := fmt.Sprintf("%x", sha256.Sum256([]byte(body)))
-
-	if expectedChecksum != actualChecksum {
-		return fmt.Errorf("migration integrity check failed: expected %s, got %s",
-			expectedChecksum, actualChecksum)
+	if h.Checksum != actual {
+		return fmt.Errorf("checksum mismatch: expected %s, got %s", h.Checksum, actual)
 	}
 
 	return nil
 }
 
-func getNextMigrationVersion(migrationsDir string) (int, error) {
-	entries, err := os.ReadDir(migrationsDir)
+// ValidateChain walks all numbered migrations in order and verifies both
+// content checksums and the merkle chain.
+func ValidateChain(migrationsDir string) error {
+	files, err := listMigrationFiles(migrationsDir)
 	if err != nil {
-		return 0, fmt.Errorf("failed to read migrations directory: %w", err)
+		return err
 	}
 
-	maxVersion := 0
+	prevChain := ""
+	for _, f := range files {
+		content, err := os.ReadFile(filepath.Join(migrationsDir, f.filename))
+		if err != nil {
+			return fmt.Errorf("%s: %w", f.filename, err)
+		}
+
+		h := extractHeaders(string(content))
+		if !h.HasHeader {
+			continue // plain SQL without migration headers, skip
+		}
+
+		if h.Checksum == "" {
+			return fmt.Errorf("%s: has headers but missing checksum", f.filename)
+		}
+
+		// Verify content checksum.
+		body := extractBody(string(content))
+		actual := fmt.Sprintf("%x", sha256.Sum256([]byte(body)))
+		if h.Checksum != actual {
+			return fmt.Errorf("%s: checksum mismatch (expected %s, got %s)", f.filename, h.Checksum, actual)
+		}
+
+		// Verify chain.
+		if h.Chain == "" {
+			// Migration predates chain feature — reset and continue.
+			prevChain = ""
+			continue
+		}
+
+		expected := computeChainHash(prevChain, h.Checksum)
+		if h.Chain != expected {
+			return fmt.Errorf("%s: chain integrity failed (expected %s, got %s)", f.filename, expected, h.Chain)
+		}
+		prevChain = h.Chain
+	}
+
+	return nil
+}
+
+type migFile struct {
+	version  int
+	filename string
+}
+
+func listMigrationFiles(migrationsDir string) ([]migFile, error) {
+	entries, err := os.ReadDir(migrationsDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read migrations directory: %w", err)
+	}
+
+	var files []migFile
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") || entry.Name() == "current.sql" {
 			continue
 		}
-
 		version, _, err := ParseMigrationName(entry.Name())
 		if err != nil {
 			continue
 		}
-
-		if version > maxVersion {
-			maxVersion = version
-		}
+		files = append(files, migFile{version, entry.Name()})
 	}
 
-	return maxVersion + 1, nil
+	sort.Slice(files, func(i, j int) bool { return files[i].version < files[j].version })
+	return files, nil
+}
+
+func computeChainHash(previousChain, contentChecksum string) string {
+	h := sha256.Sum256([]byte(previousChain + contentChecksum))
+	return fmt.Sprintf("%x", h)
+}
+
+func getLastChainHash(migrationsDir string) (string, error) {
+	files, err := listMigrationFiles(migrationsDir)
+	if err != nil {
+		return "", err
+	}
+
+	if len(files) == 0 {
+		return "", nil
+	}
+
+	last := files[len(files)-1]
+	content, err := os.ReadFile(filepath.Join(migrationsDir, last.filename))
+	if err != nil {
+		return "", fmt.Errorf("failed to read %s: %w", last.filename, err)
+	}
+
+	h := extractHeaders(string(content))
+	return h.Chain, nil // empty string if no chain header (pre-chain migration)
+}
+
+func getNextMigrationVersion(migrationsDir string) (int, error) {
+	files, err := listMigrationFiles(migrationsDir)
+	if err != nil {
+		return 0, err
+	}
+
+	if len(files) == 0 {
+		return 1, nil
+	}
+	return files[len(files)-1].version + 1, nil
 }
 
 func sanitizeDescription(description string) string {
@@ -186,13 +323,14 @@ func sanitizeDescription(description string) string {
 	return cleaned
 }
 
-func buildMigrationHeader(description string, contentChecksum string, includeInfos []IncludeInfo) string {
+func buildMigrationHeader(description, contentChecksum, chainHash string, includeInfos []IncludeInfo) string {
 	var header strings.Builder
 	now := time.Now().UTC()
 
 	header.WriteString(fmt.Sprintf("-- Migration: %s\n", description))
 	header.WriteString(fmt.Sprintf("-- Created: %s\n", now.Format(time.RFC3339)))
 	header.WriteString(fmt.Sprintf("-- Checksum: %s\n", contentChecksum))
+	header.WriteString(fmt.Sprintf("-- Chain: %s\n", chainHash))
 	header.WriteString("--\n")
 	header.WriteString("-- IMPORTANT: Do not modify this file after commit. The checksum above\n")
 	header.WriteString("-- tracks the integrity of this migration. Any changes will be detected\n")

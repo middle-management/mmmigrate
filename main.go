@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/middle-management/mmmigrate/migrate"
 	"github.com/middle-management/mmmigrate/source"
@@ -114,29 +113,10 @@ func cmdValidate(args []string) {
 	fs.Parse(args)
 
 	absDir := resolveDir(*migrationsDir)
-	entries, err := os.ReadDir(absDir)
-	if err != nil {
-		fatal("failed to read migrations directory: %v", err)
+	if err := source.ValidateChain(absDir); err != nil {
+		fatal("validation failed: %v", err)
 	}
-
-	var hasErrors bool
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") || entry.Name() == "current.sql" {
-			continue
-		}
-
-		filePath := filepath.Join(absDir, entry.Name())
-		if err := source.ValidateMigrationIntegrity(filePath); err != nil {
-			fmt.Fprintf(os.Stderr, "✗ %s: %v\n", entry.Name(), err)
-			hasErrors = true
-		} else {
-			fmt.Printf("✓ %s: integrity verified\n", entry.Name())
-		}
-	}
-
-	if hasErrors {
-		os.Exit(1)
-	}
+	fmt.Println("✓ All migrations verified (checksums and chain integrity)")
 }
 
 func resolveDir(dir string) string {
