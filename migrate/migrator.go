@@ -108,7 +108,7 @@ func (m *Migrator) runCurrentMigration(ctx context.Context, mig *source.Migratio
 	defer tx.Rollback()
 
 	if _, err = tx.ExecContext(ctx, processedSQL); err != nil {
-		return fmt.Errorf("failed to execute current.sql: %w", err)
+		return formatSQLError(processedSQL, err, "failed to execute current.sql")
 	}
 
 	if _, err = tx.ExecContext(ctx, m.dialect.UpsertCurrent(), checksum); err != nil {
@@ -131,7 +131,7 @@ func (m *Migrator) runMigration(ctx context.Context, mig *source.Migration) erro
 	defer tx.Rollback()
 
 	if _, err = tx.ExecContext(ctx, mig.SQL); err != nil {
-		return fmt.Errorf("failed to execute migration %d (%s): %w", mig.Version, mig.Name, err)
+		return formatSQLError(mig.SQL, err, fmt.Sprintf("failed to execute migration %d (%s)", mig.Version, mig.Name))
 	}
 
 	if _, err = tx.ExecContext(ctx, m.dialect.InsertApplied(), mig.Version, mig.Name); err != nil {
@@ -364,7 +364,7 @@ func TestCurrentMigration(ctx context.Context, db *sql.DB, migrationsDir string)
 	defer tx.Rollback()
 
 	if _, err := tx.ExecContext(ctx, processedSQL); err != nil {
-		return fmt.Errorf("migration failed: %w", err)
+		return formatSQLError(processedSQL, err, "migration test failed")
 	}
 
 	// Rollback is intentional — this is a dry run. The defer handles it.
