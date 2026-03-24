@@ -78,7 +78,16 @@ Each committed migration has a content checksum and a chain hash linking it to a
 
 ## Concurrency
 
-PostgreSQL uses an advisory lock to prevent concurrent migration runs (safe for multi-pod deployments). SQLite uses its native file-level locking.
+PostgreSQL uses an advisory lock, MySQL uses a named lock (`GET_LOCK`), and SQLite uses its native file-level locking — all safe for multi-pod deployments.
+
+## MySQL limitations
+
+MySQL and MariaDB DDL (`CREATE TABLE`, `ALTER TABLE`, etc.) causes an implicit commit and **cannot be rolled back** within a transaction. This affects mmmigrate in two ways:
+
+- **`commit` dry-run**: `TestCurrentMigration` cannot roll back DDL changes on MySQL. Use `-shadow-url` to verify migrations against a disposable database instead.
+- **Partial failures**: if a migration with multiple DDL statements fails partway through, the completed statements cannot be undone. Keep migrations small — ideally one DDL statement per migration.
+
+PostgreSQL and SQLite both support transactional DDL and do not have these limitations.
 
 ## As a library
 
@@ -100,11 +109,11 @@ mmmigrate borrows the `current.sql` workflow from [Graphile Migrate](https://git
 | | Graphile Migrate | mmmigrate |
 |---|---|---|
 | **Language** | Node.js | Go (single binary, no runtime) |
-| **Databases** | PostgreSQL only | PostgreSQL and SQLite via pluggable drivers |
+| **Databases** | PostgreSQL only | PostgreSQL, SQLite, and MySQL via pluggable drivers |
 | **Integrity** | SHA-1 hash chain (`--! Hash:`) | SHA-256 checksums + merkle chain (`-- Chain:`) |
 | **Includes** | `--! include` from a fixtures folder | `-- @include` from migrations subdirectories, restored on revert |
 | **Shadow DB** | Required, auto-created via root DB connection | Optional (`-shadow-url`), user-managed |
-| **Concurrency** | Advisory lock | Advisory lock (PostgreSQL), file lock (SQLite) |
+| **Concurrency** | Advisory lock | Advisory lock (PostgreSQL), named lock (MySQL), file lock (SQLite) |
 | **current.sql** | Must be idempotent; re-run on every file save (watch mode) | Must be idempotent; re-run when checksum changes |
 | **Watch mode** | Yes (auto-applies on file change) | No (explicit `apply -current`) |
 | **Placeholders** | `:PLACEHOLDER_NAME` substitution in SQL | Not supported |

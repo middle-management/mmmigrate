@@ -81,7 +81,7 @@ Each driver is a separate Go module. As a library:
 ```go
 import (
     "github.com/middle-management/mmmigrate/migrate"
-    "github.com/middle-management/mmmigrate/driver/postgres" // or driver/sqlite
+    "github.com/middle-management/mmmigrate/driver/postgres" // or driver/sqlite, driver/mysql
 )
 
 // Use the dialect explicitly:
@@ -98,7 +98,16 @@ import (
 ## Tracking Tables
 
 - **PostgreSQL**: `mmmigrate.applied`, `mmmigrate.current` (own schema)
-- **SQLite**: `mmmigrate_applied`, `mmmigrate_current`
+- **SQLite/MySQL**: `mmmigrate_applied`, `mmmigrate_current`
+
+## MySQL Limitations
+
+MySQL/MariaDB DDL (`CREATE TABLE`, `ALTER TABLE`) causes an **implicit commit** and cannot be rolled back. This means:
+
+- **`commit` dry-run** cannot roll back DDL. Use `-shadow-url` to test against a disposable database instead.
+- **Partial failures** leave completed DDL in place. Keep migrations small — ideally one DDL statement per migration.
+
+PostgreSQL and SQLite do not have this limitation.
 
 ## Common Mistakes
 
