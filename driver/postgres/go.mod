@@ -1,6 +1,6 @@
 module github.com/middle-management/mmmigrate/driver/postgres
 
-go 1.25.0
+go 1.26.1
 
 require (
 	github.com/jackc/pgx/v5 v5.9.1

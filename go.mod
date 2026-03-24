@@ -1,6 +1,6 @@
 module github.com/middle-management/mmmigrate
 
-go 1.25.0
+go 1.26.1
 
 require (
 	github.com/middle-management/mmmigrate/driver/postgres v0.0.0
