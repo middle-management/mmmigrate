@@ -97,14 +97,16 @@ mmmigrate borrows the `current.sql` workflow from [Graphile Migrate](https://git
 |---|---|---|
 | **Language** | Node.js | Go (single binary, no runtime) |
 | **Databases** | PostgreSQL only | PostgreSQL and SQLite via pluggable drivers |
-| **Includes** | Not supported | `@include` directives for shared SQL (functions, views) |
-| **Integrity** | None | SHA-256 checksums + merkle chain across all migrations |
-| **Shadow DB** | Required (auto-created) | Optional (`-shadow-url`), user-managed |
-| **Concurrency** | Not handled | Advisory locking for safe multi-pod deploys |
-| **Down migrations** | Not supported | Not supported (forward-only) |
+| **Integrity** | SHA-1 hash chain (`--! Hash:`) | SHA-256 checksums + merkle chain (`-- Chain:`) |
+| **Includes** | `--! include` from a fixtures folder | `-- @include` from migrations subdirectories, restored on revert |
+| **Shadow DB** | Required, auto-created via root DB connection | Optional (`-shadow-url`), user-managed |
+| **Concurrency** | Advisory lock | Advisory lock (PostgreSQL), file lock (SQLite) |
+| **current.sql** | Must be idempotent (re-run on every save in watch mode) | Not idempotent — applied once, tracked by checksum |
 | **Watch mode** | Yes (auto-applies on file change) | No (explicit `apply -current`) |
-| **Afterall migrations** | Yes (idempotent SQL re-run after every migration) | Use `@include` in `current.sql` instead |
-| **Usable as library** | No | Yes — `migrate` and `source` packages with `database/sql` |
+| **Placeholders** | `:PLACEHOLDER_NAME` substitution in SQL | Not supported |
+| **Hooks** | beforeReset, afterReset, beforeAll, afterAll, etc. | Not supported |
+| **Down migrations** | Not supported (forward-only) | Not supported (forward-only) |
+| **Usable as library** | Undocumented, not a public API | Yes — `migrate` and `source` packages with `database/sql` |
 
 ## License
 
