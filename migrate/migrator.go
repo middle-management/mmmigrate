@@ -3,113 +3,88 @@ package migrate
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/middle-management/mmmigrate/source"
 )
-
-// Migration represents a single migration.
-type Migration struct {
-	Version   int
-	Name      string
-	SQL       string
-	AppliedAt *time.Time
-	IsCurrent bool // true for current.sql migrations
-}
 
 // Migrator handles database migrations.
 type Migrator struct {
-	pool         *pgxpool.Pool
-	applyCurrent bool // whether to apply current.sql
+	db            *sql.DB
+	dialect       Dialect
+	migrationsDir string
+	applyCurrent  bool
 }
 
 // NewMigrator creates a new migrator instance.
-func NewMigrator(pool *pgxpool.Pool, applyCurrent bool) *Migrator {
+func NewMigrator(db *sql.DB, dialect Dialect, migrationsDir string, applyCurrent bool) *Migrator {
 	return &Migrator{
-		pool:         pool,
-		applyCurrent: applyCurrent,
+		db:            db,
+		dialect:       dialect,
+		migrationsDir: migrationsDir,
+		applyCurrent:  applyCurrent,
 	}
 }
 
-// ensureMigrationsSchema creates the migrations schema and table if they don't exist.
-func (m *Migrator) ensureMigrationsSchema(ctx context.Context) error {
-	_, err := m.pool.Exec(ctx, "CREATE SCHEMA IF NOT EXISTS migrations")
-	if err != nil {
-		return fmt.Errorf("failed to create migrations schema: %w", err)
-	}
-
-	_, err = m.pool.Exec(ctx, `
-		CREATE TABLE IF NOT EXISTS migrations.applied (
-			version     INTEGER PRIMARY KEY,
-			name        TEXT NOT NULL,
-			applied_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-		)
-	`)
-	if err != nil {
-		return fmt.Errorf("failed to create migrations.applied table: %w", err)
+func (m *Migrator) ensureMigrationsTable(ctx context.Context) error {
+	if _, err := m.db.ExecContext(ctx, m.dialect.CreateMigrationsTable()); err != nil {
+		return fmt.Errorf("failed to create migrations table: %w", err)
 	}
 
 	if m.applyCurrent {
-		_, err = m.pool.Exec(ctx, `
-			CREATE TABLE IF NOT EXISTS migrations.current (
-				id          INTEGER PRIMARY KEY DEFAULT 1,
-				checksum    TEXT NOT NULL,
-				applied_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-				CONSTRAINT  current_single_row CHECK (id = 1)
-			)
-		`)
-		if err != nil {
-			return fmt.Errorf("failed to create migrations.current table: %w", err)
+		if _, err := m.db.ExecContext(ctx, m.dialect.CreateCurrentTable()); err != nil {
+			return fmt.Errorf("failed to create current migrations table: %w", err)
 		}
 	}
 
 	return nil
 }
 
-// getAppliedMigrations returns a map of applied migration versions.
-func (m *Migrator) getAppliedMigrations(ctx context.Context) (map[int]*Migration, error) {
-	applied := make(map[int]*Migration)
+func (m *Migrator) getAppliedMigrations(ctx context.Context) (map[int]*source.Migration, error) {
+	applied := make(map[int]*source.Migration)
 
-	rows, err := m.pool.Query(ctx, "SELECT version, name, applied_at FROM migrations.applied ORDER BY version")
+	rows, err := m.db.QueryContext(ctx, m.dialect.SelectApplied())
 	if err != nil {
 		return nil, fmt.Errorf("failed to get applied migrations: %w", err)
 	}
 	defer rows.Close()
 
 	for rows.Next() {
-		var migration Migration
-		if err := rows.Scan(&migration.Version, &migration.Name, &migration.AppliedAt); err != nil {
+		var mig source.Migration
+		var appliedAt string
+		if err := rows.Scan(&mig.Version, &mig.Name, &appliedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan migration: %w", err)
 		}
-		applied[migration.Version] = &migration
+		applied[mig.Version] = &mig
 	}
 
-	return applied, nil
+	return applied, rows.Err()
 }
 
-// getCurrentChecksum gets the checksum of the currently applied current.sql.
 func (m *Migrator) getCurrentChecksum(ctx context.Context) (string, error) {
 	var checksum string
-	err := m.pool.QueryRow(ctx, "SELECT checksum FROM migrations.current WHERE id = 1").Scan(&checksum)
-	if err != nil {
+	err := m.db.QueryRowContext(ctx, m.dialect.SelectCurrentChecksum()).Scan(&checksum)
+	if err == sql.ErrNoRows {
 		return "", nil
+	}
+	if err != nil {
+		return "", err
 	}
 	return checksum, nil
 }
 
-// runCurrentMigration applies the current.sql migration if it has changed.
-func (m *Migrator) runCurrentMigration(ctx context.Context, migration *Migration) error {
-	if strings.TrimSpace(migration.SQL) == "" {
+func (m *Migrator) runCurrentMigration(ctx context.Context, mig *source.Migration) error {
+	if strings.TrimSpace(mig.SQL) == "" {
 		return nil
 	}
 
-	processedSQL, _, err := processIncludes(migration.SQL, "migrations")
+	processedSQL, _, err := source.ProcessIncludes(mig.SQL, m.migrationsDir)
 	if err != nil {
 		return fmt.Errorf("failed to process includes in current.sql: %w", err)
 	}
@@ -126,29 +101,21 @@ func (m *Migrator) runCurrentMigration(ctx context.Context, migration *Migration
 		return nil
 	}
 
-	tx, err := m.pool.Begin(ctx)
+	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to start transaction for current.sql: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 
-	_, err = tx.Exec(ctx, processedSQL)
-	if err != nil {
+	if _, err = tx.ExecContext(ctx, processedSQL); err != nil {
 		return fmt.Errorf("failed to execute current.sql: %w", err)
 	}
 
-	_, err = tx.Exec(ctx, `
-		INSERT INTO migrations.current (id, checksum, applied_at)
-		VALUES (1, $1, now())
-		ON CONFLICT (id) DO UPDATE SET
-			checksum = EXCLUDED.checksum,
-			applied_at = EXCLUDED.applied_at
-	`, checksum)
-	if err != nil {
+	if _, err = tx.ExecContext(ctx, m.dialect.UpsertCurrent(), checksum); err != nil {
 		return fmt.Errorf("failed to record current.sql checksum: %w", err)
 	}
 
-	if err = tx.Commit(ctx); err != nil {
+	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit current.sql: %w", err)
 	}
 
@@ -156,38 +123,32 @@ func (m *Migrator) runCurrentMigration(ctx context.Context, migration *Migration
 	return nil
 }
 
-// runMigration applies a single migration within a transaction.
-func (m *Migrator) runMigration(ctx context.Context, migration *Migration) error {
-	tx, err := m.pool.Begin(ctx)
+func (m *Migrator) runMigration(ctx context.Context, mig *source.Migration) error {
+	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to start transaction: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 
-	_, err = tx.Exec(ctx, migration.SQL)
-	if err != nil {
-		return fmt.Errorf("failed to execute migration %d (%s): %w", migration.Version, migration.Name, err)
+	if _, err = tx.ExecContext(ctx, mig.SQL); err != nil {
+		return fmt.Errorf("failed to execute migration %d (%s): %w", mig.Version, mig.Name, err)
 	}
 
-	_, err = tx.Exec(ctx, `
-		INSERT INTO migrations.applied (version, name, applied_at)
-		VALUES ($1, $2, now())
-	`, migration.Version, migration.Name)
-	if err != nil {
-		return fmt.Errorf("failed to record migration %d: %w", migration.Version, err)
+	if _, err = tx.ExecContext(ctx, m.dialect.InsertApplied(), mig.Version, mig.Name); err != nil {
+		return fmt.Errorf("failed to record migration %d: %w", mig.Version, err)
 	}
 
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("failed to commit migration %d: %w", migration.Version, err)
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit migration %d: %w", mig.Version, err)
 	}
 
-	slog.Info("applied migration", "version", migration.Version, "name", migration.Name)
+	slog.Info("applied migration", "version", mig.Version, "name", mig.Name)
 	return nil
 }
 
 // Run applies all pending migrations.
-func (m *Migrator) Run(ctx context.Context, migrations []*Migration) error {
-	if err := m.ensureMigrationsSchema(ctx); err != nil {
+func (m *Migrator) Run(ctx context.Context, migrations []*source.Migration) error {
+	if err := m.ensureMigrationsTable(ctx); err != nil {
 		return err
 	}
 
@@ -196,54 +157,49 @@ func (m *Migrator) Run(ctx context.Context, migrations []*Migration) error {
 		return err
 	}
 
-	var numberedMigrations []*Migration
-	var currentMigrations []*Migration
-
-	for _, migration := range migrations {
-		if migration.IsCurrent {
-			currentMigrations = append(currentMigrations, migration)
+	var numbered, current []*source.Migration
+	for _, mig := range migrations {
+		if mig.IsCurrent {
+			current = append(current, mig)
 		} else {
-			numberedMigrations = append(numberedMigrations, migration)
+			numbered = append(numbered, mig)
 		}
 	}
 
-	sort.Slice(numberedMigrations, func(i, j int) bool {
-		return numberedMigrations[i].Version < numberedMigrations[j].Version
+	sort.Slice(numbered, func(i, j int) bool {
+		return numbered[i].Version < numbered[j].Version
 	})
 
-	for _, migration := range numberedMigrations {
-		if _, isApplied := applied[migration.Version]; isApplied {
-			slog.Debug("migration already applied", "version", migration.Version, "name", migration.Name)
+	for _, mig := range numbered {
+		if _, ok := applied[mig.Version]; ok {
+			slog.Debug("migration already applied", "version", mig.Version, "name", mig.Name)
 			continue
 		}
-
-		if err := m.runMigration(ctx, migration); err != nil {
+		if err := m.runMigration(ctx, mig); err != nil {
 			return err
 		}
 	}
 
 	if m.applyCurrent {
-		for _, migration := range currentMigrations {
-			if err := m.runCurrentMigration(ctx, migration); err != nil {
+		for _, mig := range current {
+			if err := m.runCurrentMigration(ctx, mig); err != nil {
 				return err
 			}
 		}
-	} else {
-		if len(currentMigrations) > 0 {
-			slog.Warn("current.sql found but skipped (applyCurrent=false)")
-		}
+	} else if len(current) > 0 {
+		slog.Warn("current.sql found but skipped (applyCurrent=false)")
 	}
 
 	return nil
 }
 
-// RunMigrations applies all migrations from the filesystem.
-func RunMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsDir string, applyCurrent bool) error {
-	migrator := NewMigrator(pool, applyCurrent)
+// RunMigrations loads and applies all migrations from the filesystem.
+func RunMigrations(ctx context.Context, db *sql.DB, dialect Dialect, migrationsDir string, applyCurrent bool) error {
+	migrator := NewMigrator(db, dialect, migrationsDir, applyCurrent)
 
-	migrations, err := LoadMigrations(migrationsDir, applyCurrent)
+	migrations, err := source.LoadMigrations(migrationsDir, applyCurrent)
 	if err != nil {
-		return fmt.Errorf("failed to load filesystem migrations: %w", err)
+		return fmt.Errorf("failed to load migrations: %w", err)
 	}
 
 	return migrator.Run(ctx, migrations)
@@ -251,13 +207,13 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsDir string
 
 // TestCurrentMigration applies current.sql in a transaction and rolls it back,
 // verifying the SQL is valid without making permanent changes.
-func TestCurrentMigration(ctx context.Context, pool *pgxpool.Pool, migrationsDir string) error {
+func TestCurrentMigration(ctx context.Context, db *sql.DB, migrationsDir string) error {
 	content, err := os.ReadFile(filepath.Join(migrationsDir, "current.sql"))
 	if err != nil {
 		return fmt.Errorf("failed to read current.sql: %w", err)
 	}
 
-	processedSQL, _, err := processIncludes(string(content), migrationsDir)
+	processedSQL, _, err := source.ProcessIncludes(string(content), migrationsDir)
 	if err != nil {
 		return fmt.Errorf("failed to process includes: %w", err)
 	}
@@ -266,15 +222,15 @@ func TestCurrentMigration(ctx context.Context, pool *pgxpool.Pool, migrationsDir
 		return fmt.Errorf("current.sql is empty")
 	}
 
-	tx, err := pool.Begin(ctx)
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to start transaction: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 
-	if _, err := tx.Exec(ctx, processedSQL); err != nil {
+	if _, err := tx.ExecContext(ctx, processedSQL); err != nil {
 		return fmt.Errorf("migration failed: %w", err)
 	}
 
-	return tx.Rollback(ctx)
+	return tx.Rollback()
 }
