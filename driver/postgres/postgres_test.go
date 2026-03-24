@@ -38,8 +38,9 @@ func TestPostgres(t *testing.T) {
 		Dialect: func(t *testing.T) migrate.Dialect {
 			return postgres.Dialect{}
 		},
-		DumpSchema:    dumpPostgresSchema,
-		TrackingTable: "mmmigrate.applied",
+		DumpSchema:               dumpPostgresSchema,
+		TrackingTable:            "mmmigrate.applied",
+		SupportsTransactionalDDL: true,
 	})
 }
 

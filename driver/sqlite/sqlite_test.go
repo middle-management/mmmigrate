@@ -26,8 +26,9 @@ func TestSQLite(t *testing.T) {
 		Dialect: func(t *testing.T) migrate.Dialect {
 			return sqlite.Dialect{}
 		},
-		DumpSchema:    dumpSQLiteSchema,
-		TrackingTable: "mmmigrate_applied",
+		DumpSchema:               dumpSQLiteSchema,
+		TrackingTable:            "mmmigrate_applied",
+		SupportsTransactionalDDL: true,
 	})
 }
 

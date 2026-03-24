@@ -26,6 +26,10 @@ type Harness struct {
 	DumpSchema func(t *testing.T, db *sql.DB) string
 	// TrackingTable is the name of the applied-migrations tracking table.
 	TrackingTable string
+	// SupportsTransactionalDDL indicates whether the database can roll back DDL
+	// statements (CREATE TABLE, ALTER TABLE, etc.) within a transaction.
+	// PostgreSQL and SQLite support this; MySQL does not.
+	SupportsTransactionalDDL bool
 }
 
 // SetupFixtures copies the embedded fixture migrations to a temp directory
@@ -193,6 +197,10 @@ func testFailedMigration(t *testing.T, h Harness) {
 }
 
 func testTestCurrent(t *testing.T, h Harness) {
+	if !h.SupportsTransactionalDDL {
+		t.Skip("database does not support transactional DDL")
+	}
+
 	db := h.OpenDB(t)
 	dir := SetupFixtures(t)
 
