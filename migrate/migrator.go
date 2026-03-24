@@ -232,5 +232,6 @@ func TestCurrentMigration(ctx context.Context, db *sql.DB, migrationsDir string)
 		return fmt.Errorf("migration failed: %w", err)
 	}
 
-	return tx.Rollback()
+	// Rollback is intentional — this is a dry run. The defer handles it.
+	return nil
 }

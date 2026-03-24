@@ -11,6 +11,7 @@ import (
 // LoadMigrations reads all .sql files from the migrations directory.
 func LoadMigrations(dir string, loadCurrent bool) ([]*Migration, error) {
 	var migrations []*Migration
+	seen := make(map[int]string) // version -> filename, for duplicate detection
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -45,6 +46,11 @@ func LoadMigrations(dir string, loadCurrent bool) ([]*Migration, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse migration name %s: %w", entry.Name(), err)
 		}
+
+		if existing, ok := seen[version]; ok {
+			return nil, fmt.Errorf("duplicate migration version %d: %s and %s", version, existing, entry.Name())
+		}
+		seen[version] = entry.Name()
 
 		content, err := os.ReadFile(filepath.Join(dir, entry.Name()))
 		if err != nil {

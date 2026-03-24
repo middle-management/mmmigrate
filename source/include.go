@@ -21,10 +21,14 @@ var includeRegex = regexp.MustCompile(`^\s*--\s*@include\s+(.+?)\s*$`)
 
 // ProcessIncludes recursively expands @include directives in SQL content.
 func ProcessIncludes(content string, baseDir string) (string, []IncludeInfo, error) {
-	return processIncludesRecursive(content, baseDir, make(map[string]bool), nil)
+	absBaseDir, err := filepath.Abs(baseDir)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to resolve base directory: %w", err)
+	}
+	return processIncludesRecursive(content, absBaseDir, make(map[string]bool), nil)
 }
 
-func processIncludesRecursive(content string, baseDir string, visiting map[string]bool, infos []IncludeInfo) (string, []IncludeInfo, error) {
+func processIncludesRecursive(content string, absBaseDir string, visiting map[string]bool, infos []IncludeInfo) (string, []IncludeInfo, error) {
 	lines := strings.Split(content, "\n")
 	result := make([]string, 0, len(lines))
 
@@ -37,10 +41,15 @@ func processIncludesRecursive(content string, baseDir string, visiting map[strin
 
 		includePath := strings.TrimSpace(match[1])
 
-		fullPath := filepath.Join(baseDir, includePath)
+		fullPath := filepath.Join(absBaseDir, includePath)
 		absPath, err := filepath.Abs(fullPath)
 		if err != nil {
 			return "", nil, fmt.Errorf("failed to resolve include path %s at line %d: %w", includePath, i+1, err)
+		}
+
+		// Prevent path traversal outside the base directory.
+		if !strings.HasPrefix(absPath, absBaseDir+string(filepath.Separator)) {
+			return "", nil, fmt.Errorf("include path %s escapes base directory at line %d", includePath, i+1)
 		}
 
 		if visiting[absPath] {
@@ -56,7 +65,7 @@ func processIncludesRecursive(content string, baseDir string, visiting map[strin
 
 		visiting[absPath] = true
 
-		processedContent, nestedInfos, err := processIncludesRecursive(string(includeContent), baseDir, visiting, infos)
+		processedContent, nestedInfos, err := processIncludesRecursive(string(includeContent), absBaseDir, visiting, infos)
 		if err != nil {
 			return "", nil, err
 		}
