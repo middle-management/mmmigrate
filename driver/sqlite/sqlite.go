@@ -1,12 +1,6 @@
 package sqlite
 
-import (
-	"github.com/middle-management/mmmigrate/migrate"
-
-	_ "modernc.org/sqlite"
-)
-
-func init() { migrate.RegisterDialect(Dialect{}) }
+import _ "modernc.org/sqlite"
 
 // Dialect implements migrate.Dialect for SQLite.
 type Dialect struct{}
@@ -57,8 +51,6 @@ func (Dialect) Lock() string   { return "" }
 func (Dialect) Unlock() string { return "" }
 
 func (Dialect) ResetSQL() string {
-	// SQLite has no DROP ALL; we drop each table individually via a pragma trick.
-	// This is executed as a single statement, so we use a simple approach.
 	return `
 		PRAGMA writable_schema = 1;
 		DELETE FROM sqlite_master WHERE type IN ('table', 'view', 'index', 'trigger');

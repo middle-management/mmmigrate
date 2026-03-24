@@ -2,4 +2,9 @@
 
 package main
 
-import _ "github.com/middle-management/mmmigrate/driver/sqlite"
+import (
+	"github.com/middle-management/mmmigrate/driver/sqlite"
+	"github.com/middle-management/mmmigrate/migrate"
+)
+
+var dialect migrate.Dialect = sqlite.Dialect{}

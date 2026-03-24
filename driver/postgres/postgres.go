@@ -1,12 +1,6 @@
 package postgres
 
-import (
-	"github.com/middle-management/mmmigrate/migrate"
-
-	_ "github.com/jackc/pgx/v5/stdlib"
-)
-
-func init() { migrate.RegisterDialect(Dialect{}) }
+import _ "github.com/jackc/pgx/v5/stdlib"
 
 // Dialect implements migrate.Dialect for PostgreSQL.
 type Dialect struct{}

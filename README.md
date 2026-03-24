@@ -82,11 +82,10 @@ Each driver is a separate Go module:
 ```go
 import (
     "github.com/middle-management/mmmigrate/migrate"
-    "github.com/middle-management/mmmigrate/source"
-    _ "github.com/middle-management/mmmigrate/driver/postgres"
+    "github.com/middle-management/mmmigrate/driver/postgres"
 )
 
-// migrate.RunMigrations(ctx, db, migrate.DefaultDialect(), "migrations", false)
+// migrate.RunMigrations(ctx, db, postgres.Dialect{}, "migrations", false)
 ```
 
 ## Differences from Graphile Migrate

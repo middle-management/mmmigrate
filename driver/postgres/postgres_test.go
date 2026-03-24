@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	_ "github.com/middle-management/mmmigrate/driver/postgres"
+	"github.com/middle-management/mmmigrate/driver/postgres"
 	"github.com/middle-management/mmmigrate/migrate"
 	"github.com/middle-management/mmmigrate/migrate/migratetest"
 )
@@ -36,7 +36,7 @@ func TestPostgres(t *testing.T) {
 			return db
 		},
 		Dialect: func(t *testing.T) migrate.Dialect {
-			return migrate.DefaultDialect()
+			return postgres.Dialect{}
 		},
 		DumpSchema:    dumpPostgresSchema,
 		TrackingTable: "mmmigrate.applied",

@@ -63,7 +63,7 @@ func cmdApply(args []string) {
 	defer cleanup()
 
 	ctx := context.Background()
-	if err := migrate.RunMigrations(ctx, db, migrate.DefaultDialect(), absDir, *applyCurrent); err != nil {
+	if err := migrate.RunMigrations(ctx, db, dialect, absDir, *applyCurrent); err != nil {
 		fatal("failed to run migrations: %v", err)
 	}
 	fmt.Println("✓ Migrations completed successfully")
@@ -104,7 +104,6 @@ func cmdCommit(args []string) {
 		shadow = os.Getenv("SHADOW_DATABASE_URL")
 	}
 	if shadow != "" {
-		dialect := migrate.DefaultDialect()
 		shadowDB, err := sql.Open(dialect.DriverName(), shadow)
 		if err != nil {
 			fatal("failed to open shadow database: %v", err)
@@ -163,7 +162,6 @@ func resolveDir(dir string) string {
 }
 
 func openDB(databaseURL string) (*sql.DB, func()) {
-	dialect := migrate.DefaultDialect()
 	if dialect == nil {
 		fatal("no database driver compiled in (build with -tags postgres or -tags sqlite)")
 	}

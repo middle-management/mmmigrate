@@ -76,10 +76,12 @@ Each driver is a separate Go module. As a library:
 
 ```go
 import (
-    "github.com/middle-management/mmmigrate/migrate"   // engine (database/sql)
-    "github.com/middle-management/mmmigrate/source"    // file ops (no DB)
-    _ "github.com/middle-management/mmmigrate/driver/sqlite"  // or driver/postgres
+    "github.com/middle-management/mmmigrate/migrate"
+    "github.com/middle-management/mmmigrate/driver/postgres" // or driver/sqlite
 )
+
+// Use the dialect explicitly:
+// migrate.RunMigrations(ctx, db, postgres.Dialect{}, "migrations", false)
 ```
 
 ## Integrity

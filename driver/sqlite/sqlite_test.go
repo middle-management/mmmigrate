@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	_ "github.com/middle-management/mmmigrate/driver/sqlite"
+	"github.com/middle-management/mmmigrate/driver/sqlite"
 	"github.com/middle-management/mmmigrate/migrate"
 	"github.com/middle-management/mmmigrate/migrate/migratetest"
 )
@@ -24,7 +24,7 @@ func TestSQLite(t *testing.T) {
 			return db
 		},
 		Dialect: func(t *testing.T) migrate.Dialect {
-			return migrate.DefaultDialect()
+			return sqlite.Dialect{}
 		},
 		DumpSchema:    dumpSQLiteSchema,
 		TrackingTable: "mmmigrate_applied",
