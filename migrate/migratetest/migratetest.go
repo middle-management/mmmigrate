@@ -104,10 +104,25 @@ func CompareGolden(t *testing.T, got, goldenPath string) {
 		t.Fatalf("read golden file %s: %v\n(run with MMMIGRATE_UPDATE_GOLDEN=1 to create)", goldenPath, err)
 	}
 
-	if got != string(want) {
+	// Strip the "-- server:" line for comparison — it's informational metadata
+	// that differs between environments. It's kept in the file for humans.
+	gotCmp := stripServerLine(got)
+	wantCmp := stripServerLine(string(want))
+
+	if gotCmp != wantCmp {
 		t.Errorf("schema does not match golden file %s\n(run with MMMIGRATE_UPDATE_GOLDEN=1 to update)\n\n%s",
-			goldenPath, lineDiff(string(want), got))
+			goldenPath, lineDiff(wantCmp, gotCmp))
 	}
+}
+
+// stripServerLine removes the "-- server: ..." header line for comparison.
+func stripServerLine(s string) string {
+	if strings.HasPrefix(s, "-- server: ") {
+		if i := strings.Index(s, "\n"); i >= 0 {
+			return strings.TrimLeft(s[i+1:], "\n")
+		}
+	}
+	return s
 }
 
 // lineDiff produces a unified-style diff showing only changed lines.
