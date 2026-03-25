@@ -8,9 +8,9 @@ Migrations are plain SQL files. You edit `current.sql` during development, commi
 
 ```bash
 # From source (pick your driver)
-go install -tags sqlite   github.com/middle-management/mmmigrate@latest
-go install -tags postgres  github.com/middle-management/mmmigrate@latest
-go install -tags mysql     github.com/middle-management/mmmigrate@latest
+go install -tags sqlite   github.com/middle-management/mmmigrate/cmd/mmmigrate@latest
+go install -tags postgres  github.com/middle-management/mmmigrate/cmd/mmmigrate@latest
+go install -tags mysql     github.com/middle-management/mmmigrate/cmd/mmmigrate@latest
 
 # Or download a binary from GitHub Releases
 ```
@@ -91,15 +91,15 @@ PostgreSQL and SQLite both support transactional DDL and do not have these limit
 
 ## As a library
 
-Each driver is a separate Go module:
+The root module is a pure library with no driver dependencies:
 
 ```go
 import (
-    "github.com/middle-management/mmmigrate/migrate"
+    "github.com/middle-management/mmmigrate"
     "github.com/middle-management/mmmigrate/driver/postgres" // or driver/sqlite, driver/mysql
 )
 
-// migrate.RunMigrations(ctx, db, postgres.Dialect{}, "migrations", false)
+// mmmigrate.RunMigrations(ctx, db, postgres.Dialect{}, "migrations", false)
 ```
 
 ## Differences from Graphile Migrate
@@ -119,7 +119,7 @@ mmmigrate borrows the `current.sql` workflow from [Graphile Migrate](https://git
 | **Placeholders** | `:PLACEHOLDER_NAME` substitution in SQL | Not supported |
 | **Hooks** | beforeReset, afterReset, beforeAll, afterAll, etc. | Not supported |
 | **Down migrations** | Not supported (forward-only) | Not supported (forward-only) |
-| **Usable as library** | Undocumented, not a public API | Yes — `migrate` and `source` packages with `database/sql` |
+| **Usable as library** | Undocumented, not a public API | Yes — `mmmigrate` and `source` packages with `database/sql` |
 
 ## License
 

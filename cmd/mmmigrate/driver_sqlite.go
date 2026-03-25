@@ -3,8 +3,8 @@
 package main
 
 import (
+	"github.com/middle-management/mmmigrate"
 	"github.com/middle-management/mmmigrate/driver/sqlite"
-	"github.com/middle-management/mmmigrate/migrate"
 )
 
-var dialect migrate.Dialect = sqlite.Dialect{}
+var dialect mmmigrate.Dialect = sqlite.Dialect{}

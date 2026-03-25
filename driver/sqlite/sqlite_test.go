@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/middle-management/mmmigrate"
 	"github.com/middle-management/mmmigrate/driver/sqlite"
-	"github.com/middle-management/mmmigrate/migrate"
-	"github.com/middle-management/mmmigrate/migrate/migratetest"
+	"github.com/middle-management/mmmigrate/migratetest"
 )
 
 func TestSQLite(t *testing.T) {
@@ -23,7 +23,7 @@ func TestSQLite(t *testing.T) {
 			t.Cleanup(func() { db.Close() })
 			return db
 		},
-		Dialect: func(t *testing.T) migrate.Dialect {
+		Dialect: func(t *testing.T) mmmigrate.Dialect {
 			return sqlite.Dialect{}
 		},
 		DumpSchema:               dumpSQLiteSchema,

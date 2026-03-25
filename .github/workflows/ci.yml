@@ -43,8 +43,8 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Source tests
-        run: go test -race ./source/...
+      - name: Library tests
+        run: go test -race ./...
 
       - name: SQLite integration tests
         run: cd driver/sqlite && go test -race ./...
@@ -60,13 +60,13 @@ jobs:
           MMMIGRATE_TEST_MYSQL_URL: root:root@tcp(localhost:3306)/mmmigrate_test?multiStatements=true
 
       - name: Build (sqlite)
-        run: go build -tags sqlite .
+        run: cd cmd/mmmigrate && go build -tags sqlite .
 
       - name: Build (postgres)
-        run: go build -tags postgres .
+        run: cd cmd/mmmigrate && go build -tags postgres .
 
       - name: Build (mysql)
-        run: go build -tags mysql .
+        run: cd cmd/mmmigrate && go build -tags mysql .
 
       - name: Vet
         run: go vet ./...

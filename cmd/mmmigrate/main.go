@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/middle-management/mmmigrate/migrate"
+	"github.com/middle-management/mmmigrate"
 	"github.com/middle-management/mmmigrate/source"
 )
 
@@ -92,7 +92,7 @@ func cmdApply(args []string) {
 	ctx := context.Background()
 
 	if *dryRun {
-		pending, err := migrate.DryRun(ctx, db, dialect, absDir, *applyCurrent)
+		pending, err := mmmigrate.DryRun(ctx, db, dialect, absDir, *applyCurrent)
 		if err != nil {
 			fatal("%v", err)
 		}
@@ -107,7 +107,7 @@ func cmdApply(args []string) {
 		return
 	}
 
-	if err := migrate.RunMigrations(ctx, db, dialect, absDir, *applyCurrent); err != nil {
+	if err := mmmigrate.RunMigrations(ctx, db, dialect, absDir, *applyCurrent); err != nil {
 		fatal("%v", err)
 	}
 	fmt.Println("✓ Migrations completed successfully")
@@ -133,7 +133,7 @@ func cmdCommit(args []string) {
 
 	ctx := context.Background()
 	fmt.Println("Testing migration against database...")
-	if err := migrate.TestCurrentMigration(ctx, db, absDir); err != nil {
+	if err := mmmigrate.TestCurrentMigration(ctx, db, absDir); err != nil {
 		fatal("migration test failed: %v", err)
 	}
 	fmt.Println("✓ Migration test passed")
@@ -154,7 +154,7 @@ func cmdCommit(args []string) {
 		defer shadowDB.Close()
 
 		fmt.Println("Verifying full migration chain against shadow database...")
-		if err := migrate.VerifyAgainstShadow(ctx, shadowDB, dialect, absDir); err != nil {
+		if err := mmmigrate.VerifyAgainstShadow(ctx, shadowDB, dialect, absDir); err != nil {
 			fatal("shadow verification failed: %v", err)
 		}
 		fmt.Println("✓ Shadow database verification passed")
@@ -183,7 +183,7 @@ func cmdStatus(args []string) {
 	defer cleanup()
 
 	ctx := context.Background()
-	statuses, err := migrate.Status(ctx, db, dialect, absDir)
+	statuses, err := mmmigrate.Status(ctx, db, dialect, absDir)
 	if err != nil {
 		fatal("%v", err)
 	}
@@ -254,7 +254,7 @@ func resolveDir(dir string) string {
 
 func openDB(databaseURL string) (*sql.DB, func()) {
 	if dialect == nil {
-		fatal("no database driver compiled in (build with -tags postgres or -tags sqlite)")
+		fatal("no database driver compiled in (build with -tags postgres, -tags sqlite, or -tags mysql)")
 	}
 
 	if databaseURL == "" {

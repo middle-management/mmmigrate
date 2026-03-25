@@ -1,4 +1,4 @@
-package migrate
+package mmmigrate
 
 // Dialect abstracts database-specific SQL syntax.
 type Dialect interface {

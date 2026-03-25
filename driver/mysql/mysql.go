@@ -1,14 +1,14 @@
 package mysql
 
 import (
-	"github.com/middle-management/mmmigrate/migrate"
+	"github.com/middle-management/mmmigrate"
 
 	_ "github.com/go-sql-driver/mysql"
 )
 
-var _ migrate.Dialect = Dialect{}
+var _ mmmigrate.Dialect = Dialect{}
 
-// Dialect implements migrate.Dialect for MySQL/MariaDB.
+// Dialect implements mmmigrate.Dialect for MySQL/MariaDB.
 //
 // Note: MySQL DDL statements (CREATE TABLE, ALTER TABLE, etc.) are not
 // transactional — they cause an implicit commit. Per-migration transactions

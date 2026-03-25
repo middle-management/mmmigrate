@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/middle-management/mmmigrate"
 	"github.com/middle-management/mmmigrate/driver/postgres"
-	"github.com/middle-management/mmmigrate/migrate"
-	"github.com/middle-management/mmmigrate/migrate/migratetest"
+	"github.com/middle-management/mmmigrate/migratetest"
 )
 
 func TestPostgres(t *testing.T) {
@@ -35,7 +35,7 @@ func TestPostgres(t *testing.T) {
 			db.Exec("DROP TABLE IF EXISTS users, posts CASCADE")
 			return db
 		},
-		Dialect: func(t *testing.T) migrate.Dialect {
+		Dialect: func(t *testing.T) mmmigrate.Dialect {
 			return postgres.Dialect{}
 		},
 		DumpSchema:               dumpPostgresSchema,

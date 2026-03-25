@@ -3,8 +3,8 @@
 package main
 
 import (
+	"github.com/middle-management/mmmigrate"
 	"github.com/middle-management/mmmigrate/driver/postgres"
-	"github.com/middle-management/mmmigrate/migrate"
 )
 
-var dialect migrate.Dialect = postgres.Dialect{}
+var dialect mmmigrate.Dialect = postgres.Dialect{}

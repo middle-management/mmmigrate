@@ -14,7 +14,7 @@ mkdir -p migrations
 touch migrations/current.sql   # your working file
 ```
 
-Build the CLI with a driver tag: `go build -tags sqlite .`, `go build -tags postgres .`, or `go build -tags mysql .`
+Build the CLI with a driver tag: `cd cmd/mmmigrate && go build -tags sqlite .`, `go build -tags postgres .`, or `go build -tags mysql .`
 
 ## Workflow
 
@@ -80,12 +80,12 @@ Each driver is a separate Go module. As a library:
 
 ```go
 import (
-    "github.com/middle-management/mmmigrate/migrate"
+    "github.com/middle-management/mmmigrate"
     "github.com/middle-management/mmmigrate/driver/postgres" // or driver/sqlite, driver/mysql
 )
 
 // Use the dialect explicitly:
-// migrate.RunMigrations(ctx, db, postgres.Dialect{}, "migrations", false)
+// mmmigrate.RunMigrations(ctx, db, postgres.Dialect{}, "migrations", false)
 ```
 
 ## Integrity

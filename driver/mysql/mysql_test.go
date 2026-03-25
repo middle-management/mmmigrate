@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/middle-management/mmmigrate"
 	"github.com/middle-management/mmmigrate/driver/mysql"
-	"github.com/middle-management/mmmigrate/migrate"
-	"github.com/middle-management/mmmigrate/migrate/migratetest"
+	"github.com/middle-management/mmmigrate/migratetest"
 )
 
 func TestMySQL(t *testing.T) {
@@ -34,7 +34,7 @@ func TestMySQL(t *testing.T) {
 			resetDB(t, db)
 			return db
 		},
-		Dialect: func(t *testing.T) migrate.Dialect {
+		Dialect: func(t *testing.T) mmmigrate.Dialect {
 			return mysql.Dialect{}
 		},
 		DumpSchema:    dumpMySQLSchema,
