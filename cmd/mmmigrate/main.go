@@ -119,6 +119,7 @@ func cmdCommit(args []string) {
 	shadowURL := fs.String("shadow-url", "", "Shadow database URL for full replay verification (defaults to SHADOW_DATABASE_URL env var)")
 	migrationsDir := fs.String("migrations", "migrations", "Path to migrations directory")
 	description := fs.String("description", "", "Description for the committed migration (required)")
+	skipVerify := fs.Bool("skip-verify", false, "Skip migration verification (commit without testing against a database)")
 	fs.Parse(args)
 
 	if *description == "" {
@@ -128,36 +129,42 @@ func cmdCommit(args []string) {
 	}
 
 	absDir := resolveDir(*migrationsDir)
-	db, cleanup := openDB(*databaseURL)
-	defer cleanup()
 
-	ctx := context.Background()
-	fmt.Println("Testing migration against database...")
-	if err := mmmigrate.TestCurrentMigration(ctx, db, absDir); err != nil {
-		fatal("migration test failed: %v", err)
+	if !*skipVerify {
+		db, cleanup := openDB(*databaseURL)
+		defer cleanup()
+
+		ctx := context.Background()
+		fmt.Println("Testing migration against database...")
+		if err := mmmigrate.TestCurrentMigration(ctx, db, absDir); err != nil {
+			fatal("migration test failed: %v", err)
+		}
+		fmt.Println("✓ Migration test passed")
 	}
-	fmt.Println("✓ Migration test passed")
 
 	if err := source.CommitCurrentMigration(absDir, *description); err != nil {
 		fatal("%v", err)
 	}
 
-	shadow := *shadowURL
-	if shadow == "" {
-		shadow = os.Getenv("SHADOW_DATABASE_URL")
-	}
-	if shadow != "" {
-		shadowDB, err := sql.Open(dialect.DriverName(), shadow)
-		if err != nil {
-			fatal("failed to open shadow database: %v", err)
+	if !*skipVerify {
+		shadow := *shadowURL
+		if shadow == "" {
+			shadow = os.Getenv("SHADOW_DATABASE_URL")
 		}
-		defer shadowDB.Close()
+		if shadow != "" {
+			shadowDB, err := sql.Open(dialect.DriverName(), shadow)
+			if err != nil {
+				fatal("failed to open shadow database: %v", err)
+			}
+			defer shadowDB.Close()
 
-		fmt.Println("Verifying full migration chain against shadow database...")
-		if err := mmmigrate.VerifyAgainstShadow(ctx, shadowDB, dialect, absDir); err != nil {
-			fatal("shadow verification failed: %v", err)
+			ctx := context.Background()
+			fmt.Println("Verifying full migration chain against shadow database...")
+			if err := mmmigrate.VerifyAgainstShadow(ctx, shadowDB, dialect, absDir); err != nil {
+				fatal("shadow verification failed: %v", err)
+			}
+			fmt.Println("✓ Shadow database verification passed")
 		}
-		fmt.Println("✓ Shadow database verification passed")
 	}
 }
 
