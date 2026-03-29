@@ -80,6 +80,47 @@ Each committed migration has a content checksum and a chain hash linking it to a
 
 PostgreSQL uses an advisory lock, MySQL uses a named lock (`GET_LOCK`), and SQLite uses its native file-level locking — all safe for multi-pod deployments.
 
+## Shadow database
+
+When you run `mmmigrate commit`, the tool tests `current.sql` against your development database inside a transaction and rolls it back. This works well for PostgreSQL and SQLite, which support transactional DDL. On MySQL, however, DDL statements (`CREATE TABLE`, `ALTER TABLE`, etc.) cause an implicit commit and **cannot be rolled back**, leaving your dev database in a dirty state.
+
+The shadow database solves this: it's a separate, disposable database that mmmigrate resets, then replays every committed migration plus `current.sql` from scratch. This verifies the entire migration chain works on a clean database — not just the latest migration in isolation.
+
+### When to use it
+
+- **MySQL/MariaDB** — essentially required, since the normal commit dry-run can't roll back DDL.
+- **Any database** — useful as an extra safety net before committing, especially in CI. It catches problems like migrations that depend on manual schema changes or ordering issues that only surface on a fresh database.
+
+### Setup
+
+Create a dedicated database for shadow use. It will be **fully wiped** on every run — never point it at a database you care about.
+
+```bash
+# PostgreSQL
+createdb myapp_shadow
+
+# MySQL
+mysql -e "CREATE DATABASE myapp_shadow"
+
+# SQLite — just use a temp file or :memory:
+```
+
+### Usage
+
+Pass `-shadow-url` to `commit`, or set the `SHADOW_DATABASE_URL` environment variable:
+
+```bash
+# Via flag
+mmmigrate commit -description "add events table" \
+  -shadow-url "postgres://localhost/myapp_shadow"
+
+# Via environment variable
+export SHADOW_DATABASE_URL="postgres://localhost/myapp_shadow"
+mmmigrate commit -description "add events table"
+```
+
+The shadow verification runs after the normal commit test passes. If shadow replay fails, the commit is aborted and no migration file is written.
+
 ## MySQL limitations
 
 MySQL and MariaDB DDL (`CREATE TABLE`, `ALTER TABLE`, etc.) causes an implicit commit and **cannot be rolled back** within a transaction. This affects mmmigrate in two ways:
