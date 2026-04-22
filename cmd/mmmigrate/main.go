@@ -26,6 +26,7 @@ Commands:
   render     Render current.sql with includes expanded (to stdout)
   check      Check if current.sql has uncommitted changes
   validate   Validate checksums and chain integrity
+  watch      Watch current.sql and its includes, re-apply on change
   version    Print version
 
 Flags:
@@ -57,6 +58,8 @@ func main() {
 		cmdCheck(args)
 	case "validate":
 		cmdValidate(args)
+	case "watch":
+		cmdWatch(args)
 	case "version":
 		fmt.Println(version)
 	default:
