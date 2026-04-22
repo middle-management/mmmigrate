@@ -3,6 +3,7 @@ module github.com/middle-management/mmmigrate/cmd/mmmigrate
 go 1.26.1
 
 require (
+	github.com/fsnotify/fsnotify v1.9.0
 	github.com/middle-management/mmmigrate v0.0.0
 	github.com/middle-management/mmmigrate/driver/mysql v0.0.0
 	github.com/middle-management/mmmigrate/driver/postgres v0.0.0
