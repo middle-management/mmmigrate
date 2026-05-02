@@ -36,13 +36,16 @@ edit current.sql → apply -current (dev, iterate) → commit → apply (prod)
 |---------|----------|---------|
 | `init` | no | Create migrations directory and empty current.sql |
 | `apply [-current] [-dry-run]` | yes | Run pending migrations. `-current` includes current.sql, `-dry-run` shows what would run |
-| `commit -description "..."` | yes | Test and commit current.sql as numbered migration |
+| `commit -description "..." [-shadow-url URL] [-skip-verify]` | yes* | Test and commit current.sql as numbered migration |
 | `revert` | no | Uncommit last migration back to current.sql (files only) |
 | `status` | yes | Show which migrations are applied/pending |
 | `render` | no | Print current.sql with includes expanded (useful for piping to psql) |
 | `check` | no | Verify current.sql has no uncommitted changes (CI gate) |
 | `validate` | no | Verify checksums and merkle chain of all migrations |
+| `watch [-debounce DURATION]` | yes | Watch current.sql + includes and re-apply on change (dev loop) |
 | `version` | no | Print version |
+
+*`commit` skips the DB test when `-skip-verify` is set. `-shadow-url` (or `SHADOW_DATABASE_URL`) additionally replays the full chain on a disposable database — required for MySQL DDL.
 
 All commands accept `-migrations DIR` (default: `migrations`). DB commands accept `-database-url URL` (default: `DATABASE_URL` env).
 

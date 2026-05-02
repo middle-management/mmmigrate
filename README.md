@@ -44,17 +44,18 @@ DATABASE_URL="postgres://prod/myapp" mmmigrate apply
 |---------|----------|-------------|
 | `init` | no | Create migrations directory and empty current.sql |
 | `apply [-current] [-dry-run]` | yes | Run pending migrations. `-current` includes current.sql |
-| `commit -description "..." [-skip-verify]` | yes* | Test and commit current.sql as a numbered migration |
+| `commit -description "..." [-shadow-url URL] [-skip-verify]` | yes* | Test and commit current.sql as a numbered migration |
 | `revert` | no | Uncommit last migration back to current.sql |
 | `status` | yes | Show which migrations are applied/pending |
 | `render` | no | Print current.sql with includes expanded (pipe to psql) |
 | `check` | no | Verify current.sql has no uncommitted changes |
 | `validate` | no | Verify checksums and merkle chain integrity |
+| `watch [-debounce DURATION]` | yes | Watch current.sql + includes and re-apply on change |
 | `version` | no | Print version |
 
 *`commit` does not need a database connection when `-skip-verify` is used.
 
-All commands accept `-migrations DIR` (default `migrations`) and `-database-url URL` (default `DATABASE_URL` env).
+All commands accept `-migrations DIR` (default `migrations`). Database commands accept `-database-url URL` (default `DATABASE_URL` env).
 
 ## Includes
 
@@ -67,6 +68,17 @@ CREATE TABLE events (id SERIAL PRIMARY KEY, name TEXT);
 ```
 
 On commit, includes are expanded inline. On revert, they are restored to `@include` directives. Paths are restricted to the migrations directory.
+
+## Watch mode
+
+`mmmigrate watch` re-applies `current.sql` (and any `@include`d files) whenever they change on disk. It does an initial apply on startup, then watches the migrations directory and any subdirectories containing includes. New `@include` directives are picked up automatically after the next save.
+
+```bash
+mmmigrate watch                          # default debounce 200ms
+mmmigrate watch -debounce 500ms          # coalesce bursts of editor events
+```
+
+This is the equivalent of running `apply -current` on every save. Stop with Ctrl-C.
 
 ## Integrity
 
@@ -158,7 +170,7 @@ mmmigrate borrows the `current.sql` workflow from [Graphile Migrate](https://git
 | **Shadow DB** | Required, auto-created via root DB connection | Optional (`-shadow-url`), user-managed |
 | **Concurrency** | Advisory lock | Advisory lock (PostgreSQL), named lock (MySQL), file lock (SQLite) |
 | **current.sql** | Must be idempotent; re-run on every file save (watch mode) | Must be idempotent; re-run when checksum changes |
-| **Watch mode** | Yes (auto-applies on file change) | No (explicit `apply -current`) |
+| **Watch mode** | Yes (auto-applies on file change) | Yes (`mmmigrate watch`) or explicit `apply -current` |
 | **Placeholders** | `:PLACEHOLDER_NAME` substitution in SQL | Not supported |
 | **Hooks** | beforeReset, afterReset, beforeAll, afterAll, etc. | Not supported |
 | **Down migrations** | Not supported (forward-only) | Not supported (forward-only) |
