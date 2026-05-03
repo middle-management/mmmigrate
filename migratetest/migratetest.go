@@ -189,7 +189,7 @@ func testSchema(t *testing.T, h Harness) {
 	os.Remove(filepath.Join(dir, "current.sql"))
 
 	ctx := context.Background()
-	if err := mmmigrate.RunMigrations(ctx, db, h.Dialect(t), dir, false); err != nil {
+	if err := mmmigrate.RunMigrations(ctx, db, h.Dialect(t), os.DirFS(dir), false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -208,7 +208,7 @@ func testSchemaWithCurrent(t *testing.T, h Harness) {
 	dir := SetupFixtures(t)
 
 	ctx := context.Background()
-	if err := mmmigrate.RunMigrations(ctx, db, h.Dialect(t), dir, true); err != nil {
+	if err := mmmigrate.RunMigrations(ctx, db, h.Dialect(t), os.DirFS(dir), true); err != nil {
 		t.Fatal(err)
 	}
 
@@ -225,10 +225,11 @@ func testSkipsApplied(t *testing.T, h Harness) {
 	d := h.Dialect(t)
 
 	// Run twice — second run should be a no-op.
-	if err := mmmigrate.RunMigrations(ctx, db, d, dir, false); err != nil {
+	fsys := os.DirFS(dir)
+	if err := mmmigrate.RunMigrations(ctx, db, d, fsys, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := mmmigrate.RunMigrations(ctx, db, d, dir, false); err != nil {
+	if err := mmmigrate.RunMigrations(ctx, db, d, fsys, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -246,7 +247,7 @@ func testFailedMigration(t *testing.T, h Harness) {
 	writeSQL(t, dir, "004_bad.sql", `THIS IS NOT VALID SQL;`)
 
 	ctx := context.Background()
-	err := mmmigrate.RunMigrations(ctx, db, h.Dialect(t), dir, false)
+	err := mmmigrate.RunMigrations(ctx, db, h.Dialect(t), os.DirFS(dir), false)
 	if err == nil {
 		t.Fatal("expected error from bad migration")
 	}
@@ -267,12 +268,13 @@ func testTestCurrent(t *testing.T, h Harness) {
 
 	// First apply numbered migrations so the schema exists.
 	ctx := context.Background()
-	if err := mmmigrate.RunMigrations(ctx, db, h.Dialect(t), dir, false); err != nil {
+	fsys := os.DirFS(dir)
+	if err := mmmigrate.RunMigrations(ctx, db, h.Dialect(t), fsys, false); err != nil {
 		t.Fatal(err)
 	}
 
 	// TestCurrentMigration should roll back — bio column should not exist.
-	if err := mmmigrate.TestCurrentMigration(ctx, db, dir); err != nil {
+	if err := mmmigrate.TestCurrentMigration(ctx, db, fsys); err != nil {
 		t.Fatal(err)
 	}
 
@@ -290,7 +292,7 @@ func testTestCurrentInvalid(t *testing.T, h Harness) {
 	writeSQL(t, dir, "current.sql", `THIS IS NOT VALID SQL;`)
 
 	ctx := context.Background()
-	if err := mmmigrate.TestCurrentMigration(ctx, db, dir); err == nil {
+	if err := mmmigrate.TestCurrentMigration(ctx, db, os.DirFS(dir)); err == nil {
 		t.Error("expected error for invalid SQL")
 	}
 }
@@ -302,7 +304,7 @@ func testShadow(t *testing.T, h Harness) {
 	ctx := context.Background()
 	d := h.Dialect(t)
 
-	if err := mmmigrate.VerifyAgainstShadow(ctx, shadowDB, d, dir); err != nil {
+	if err := mmmigrate.VerifyAgainstShadow(ctx, shadowDB, d, os.DirFS(dir)); err != nil {
 		t.Fatalf("shadow verification failed: %v", err)
 	}
 
@@ -316,7 +318,7 @@ func testEmptyDir(t *testing.T, h Harness) {
 	dir := t.TempDir()
 
 	ctx := context.Background()
-	if err := mmmigrate.RunMigrations(ctx, db, h.Dialect(t), dir, false); err != nil {
+	if err := mmmigrate.RunMigrations(ctx, db, h.Dialect(t), os.DirFS(dir), false); err != nil {
 		t.Fatalf("running migrations on empty dir should succeed: %v", err)
 	}
 }

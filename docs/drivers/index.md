@@ -46,6 +46,7 @@ The Homebrew formula at [middle-management/homebrew-tap](https://github.com/midd
 | PostgreSQL driver | `github.com/middle-management/mmmigrate/driver/postgres` | `pgx` + `Dialect` |
 | SQLite driver | `github.com/middle-management/mmmigrate/driver/sqlite` | `modernc.org/sqlite` + `Dialect` |
 | MySQL driver | `github.com/middle-management/mmmigrate/driver/mysql` | `go-sql-driver/mysql` + `Dialect` |
+| pglite driver (`js/wasm` only) | `github.com/middle-management/mmmigrate/driver/pglite` | bridges to pglite via `syscall/js` — see [WASM](../wasm.md) |
 
 The library module imports no database drivers — that's why it's safe to depend on from any project. Driver modules pull in their respective `database/sql` adapters.
 

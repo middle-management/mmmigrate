@@ -2,18 +2,17 @@ package source
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
+	"io/fs"
 	"strconv"
 	"strings"
 )
 
-// LoadMigrations reads all .sql files from the migrations directory.
-func LoadMigrations(dir string, loadCurrent bool) ([]*Migration, error) {
+// LoadMigrations reads all .sql files from the migrations FS rooted at ".".
+func LoadMigrations(fsys fs.FS, loadCurrent bool) ([]*Migration, error) {
 	var migrations []*Migration
 	seen := make(map[int]string) // version -> filename, for duplicate detection
 
-	entries, err := os.ReadDir(dir)
+	entries, err := fs.ReadDir(fsys, ".")
 	if err != nil {
 		return nil, fmt.Errorf("failed to read migrations directory: %w", err)
 	}
@@ -28,7 +27,7 @@ func LoadMigrations(dir string, loadCurrent bool) ([]*Migration, error) {
 				continue
 			}
 
-			content, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+			content, err := fs.ReadFile(fsys, entry.Name())
 			if err != nil {
 				return nil, fmt.Errorf("failed to read current.sql: %w", err)
 			}
@@ -52,7 +51,7 @@ func LoadMigrations(dir string, loadCurrent bool) ([]*Migration, error) {
 		}
 		seen[version] = entry.Name()
 
-		content, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		content, err := fs.ReadFile(fsys, entry.Name())
 		if err != nil {
 			return nil, fmt.Errorf("failed to read migration file %s: %w", entry.Name(), err)
 		}

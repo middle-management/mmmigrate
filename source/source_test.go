@@ -61,7 +61,8 @@ func TestLoadMigrations(t *testing.T) {
 	writeSQL(t, dir, "002_second.sql", "SELECT 2;")
 	writeSQL(t, dir, "current.sql", "SELECT 3;")
 
-	migs, err := source.LoadMigrations(dir, false)
+	fsys := os.DirFS(dir)
+	migs, err := source.LoadMigrations(fsys, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +70,7 @@ func TestLoadMigrations(t *testing.T) {
 		t.Errorf("expected 2 migrations without current, got %d", len(migs))
 	}
 
-	migs, err = source.LoadMigrations(dir, true)
+	migs, err = source.LoadMigrations(fsys, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +85,7 @@ func TestLoadMigrationsDuplicateVersion(t *testing.T) {
 	writeSQL(t, dir, "001_first.sql", "SELECT 1;")
 	writeSQL(t, dir, "001_second.sql", "SELECT 2;")
 
-	_, err := source.LoadMigrations(dir, false)
+	_, err := source.LoadMigrations(os.DirFS(dir), false)
 	if err == nil {
 		t.Fatal("expected error for duplicate version")
 	}
@@ -247,7 +248,7 @@ func TestIncludeProcessing(t *testing.T) {
 	os.MkdirAll(funcDir, 0755)
 	writeSQL(t, funcDir, "helper.sql", `SELECT 1;`)
 
-	result, infos, err := source.ProcessIncludes("-- @include functions/helper.sql", dir)
+	result, infos, err := source.ProcessIncludes("-- @include functions/helper.sql", os.DirFS(dir))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +270,7 @@ func TestIncludeCircularDetection(t *testing.T) {
 	writeSQL(t, dir, "a.sql", "-- @include b.sql")
 	writeSQL(t, dir, "b.sql", "-- @include a.sql")
 
-	_, _, err := source.ProcessIncludes("-- @include a.sql", dir)
+	_, _, err := source.ProcessIncludes("-- @include a.sql", os.DirFS(dir))
 	if err == nil {
 		t.Error("expected error for circular include")
 	}
@@ -281,7 +282,7 @@ func TestIncludeCircularDetection(t *testing.T) {
 func TestIncludePathTraversal(t *testing.T) {
 	dir := t.TempDir()
 
-	_, _, err := source.ProcessIncludes("-- @include ../../../etc/passwd", dir)
+	_, _, err := source.ProcessIncludes("-- @include ../../../etc/passwd", os.DirFS(dir))
 	if err == nil {
 		t.Fatal("expected error for path traversal")
 	}

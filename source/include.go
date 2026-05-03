@@ -3,8 +3,8 @@ package source
 import (
 	"crypto/sha256"
 	"fmt"
-	"os"
-	"path/filepath"
+	"io/fs"
+	"path"
 	"regexp"
 	"strings"
 )
@@ -20,15 +20,12 @@ type IncludeInfo struct {
 var includeRegex = regexp.MustCompile(`^\s*--\s*@include\s+(.+?)\s*$`)
 
 // ProcessIncludes recursively expands @include directives in SQL content.
-func ProcessIncludes(content string, baseDir string) (string, []IncludeInfo, error) {
-	absBaseDir, err := filepath.Abs(baseDir)
-	if err != nil {
-		return "", nil, fmt.Errorf("failed to resolve base directory: %w", err)
-	}
-	return processIncludesRecursive(content, absBaseDir, make(map[string]bool), nil)
+// Include paths are resolved relative to the root of fsys.
+func ProcessIncludes(content string, fsys fs.FS) (string, []IncludeInfo, error) {
+	return processIncludesRecursive(content, fsys, make(map[string]bool), nil)
 }
 
-func processIncludesRecursive(content string, absBaseDir string, visiting map[string]bool, infos []IncludeInfo) (string, []IncludeInfo, error) {
+func processIncludesRecursive(content string, fsys fs.FS, visiting map[string]bool, infos []IncludeInfo) (string, []IncludeInfo, error) {
 	lines := strings.Split(content, "\n")
 	result := make([]string, 0, len(lines))
 
@@ -41,36 +38,33 @@ func processIncludesRecursive(content string, absBaseDir string, visiting map[st
 
 		includePath := strings.TrimSpace(match[1])
 
-		fullPath := filepath.Join(absBaseDir, includePath)
-		absPath, err := filepath.Abs(fullPath)
-		if err != nil {
-			return "", nil, fmt.Errorf("failed to resolve include path %s at line %d: %w", includePath, i+1, err)
-		}
-
-		// Prevent path traversal outside the base directory.
-		if !strings.HasPrefix(absPath, absBaseDir+string(filepath.Separator)) {
+		// Normalize and validate: fs.FS uses forward-slash paths and rejects
+		// absolute / .. components. path.Clean drops a leading "./" but keeps
+		// "../" so we explicitly reject anything that escapes root.
+		cleanPath := path.Clean(includePath)
+		if !fs.ValidPath(cleanPath) {
 			return "", nil, fmt.Errorf("include path %s escapes base directory at line %d", includePath, i+1)
 		}
 
-		if visiting[absPath] {
+		if visiting[cleanPath] {
 			return "", nil, fmt.Errorf("circular include detected: %s at line %d", includePath, i+1)
 		}
 
-		includeContent, err := os.ReadFile(absPath)
+		includeContent, err := fs.ReadFile(fsys, cleanPath)
 		if err != nil {
 			return "", nil, fmt.Errorf("failed to read include file %s at line %d: %w", includePath, i+1, err)
 		}
 
 		checksum := fmt.Sprintf("%x", sha256.Sum256(includeContent))
 
-		visiting[absPath] = true
+		visiting[cleanPath] = true
 
-		processedContent, nestedInfos, err := processIncludesRecursive(string(includeContent), absBaseDir, visiting, infos)
+		processedContent, nestedInfos, err := processIncludesRecursive(string(includeContent), fsys, visiting, infos)
 		if err != nil {
 			return "", nil, err
 		}
 
-		delete(visiting, absPath)
+		delete(visiting, cleanPath)
 
 		startLine := len(result) + 1
 		includeLines := strings.Split(processedContent, "\n")
