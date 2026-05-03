@@ -1,6 +1,6 @@
 //go:build js && wasm
 
-package pglite
+package jsdb
 
 import (
 	"context"
@@ -17,9 +17,8 @@ func (c *conn) Prepare(query string) (driver.Stmt, error) {
 
 func (c *conn) Close() error { return nil }
 
-// Begin issues a BEGIN against the underlying pglite instance. mmmigrate uses
-// transactions to apply each migration atomically; pglite supports raw
-// BEGIN/COMMIT/ROLLBACK statements on its single connection.
+// Begin issues a BEGIN against the JS-side db. Both Postgres and SQLite
+// support raw BEGIN/COMMIT/ROLLBACK statements on a single connection.
 func (c *conn) Begin() (driver.Tx, error) {
 	if _, err := await(c.db.Call("exec", "BEGIN")); err != nil {
 		return nil, err
@@ -28,7 +27,7 @@ func (c *conn) Begin() (driver.Tx, error) {
 }
 
 // ExecContext runs a statement, optionally with parameters. Without
-// parameters we use pglite's .exec() which supports multi-statement SQL —
+// parameters we use .exec() which supports multi-statement SQL —
 // migration files frequently contain several statements separated by ";".
 // With parameters we fall back to .query() which is single-statement only.
 func (c *conn) ExecContext(_ context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
@@ -57,7 +56,6 @@ func (c *conn) QueryContext(_ context.Context, query string, args []driver.Named
 	return newRows(res), nil
 }
 
-// Compile-time interface checks.
 var (
 	_ driver.Conn           = (*conn)(nil)
 	_ driver.ExecerContext  = (*conn)(nil)
@@ -87,11 +85,11 @@ func (s *stmt) Close() error  { return nil }
 func (s *stmt) NumInput() int { return -1 }
 
 func (s *stmt) Exec(args []driver.Value) (driver.Result, error) {
-	return nil, errors.New("pglite: use ExecContext")
+	return nil, errors.New("jsdb: use ExecContext")
 }
 
 func (s *stmt) Query(args []driver.Value) (driver.Rows, error) {
-	return nil, errors.New("pglite: use QueryContext")
+	return nil, errors.New("jsdb: use QueryContext")
 }
 
 func (s *stmt) ExecContext(ctx context.Context, args []driver.NamedValue) (driver.Result, error) {

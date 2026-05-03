@@ -1,17 +1,19 @@
 //go:build js && wasm
 
-package pglite
+package jsdb
 
 import (
 	"errors"
 	"syscall/js"
 )
 
-// await blocks the current goroutine until the JS Promise settles, then
-// returns its resolved value or rejection reason. The Go scheduler yields
-// to the JS event loop while waiting on the channel, which is what allows
-// the Promise to actually run.
+// await blocks the current goroutine until a JS Promise (or plain value)
+// settles. Synchronous values are passed through unchanged.
 func await(p js.Value) (js.Value, error) {
+	if !isPromise(p) {
+		return p, nil
+	}
+
 	type result struct {
 		val js.Value
 		err error
@@ -39,13 +41,24 @@ func await(p js.Value) (js.Value, error) {
 	return r.val, r.err
 }
 
+func isPromise(v js.Value) bool {
+	if v.IsUndefined() || v.IsNull() {
+		return false
+	}
+	if v.Type() != js.TypeObject {
+		return false
+	}
+	then := v.Get("then")
+	return !then.IsUndefined() && then.Type() == js.TypeFunction
+}
+
 func jsError(args []js.Value) error {
 	if len(args) == 0 {
-		return errors.New("pglite: unknown error")
+		return errors.New("jsdb: unknown error")
 	}
 	v := args[0]
 	if v.IsUndefined() || v.IsNull() {
-		return errors.New("pglite: unknown error")
+		return errors.New("jsdb: unknown error")
 	}
 	if msg := v.Get("message"); !msg.IsUndefined() && !msg.IsNull() {
 		return errors.New(msg.String())

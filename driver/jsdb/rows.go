@@ -1,6 +1,6 @@
 //go:build js && wasm
 
-package pglite
+package jsdb
 
 import (
 	"database/sql/driver"
@@ -8,9 +8,9 @@ import (
 	"syscall/js"
 )
 
-// rows wraps a pglite Results object: { fields: [{name,...}], rows: [{col: val, ...}] }.
-// We snapshot field names and row values up front because pglite's results
-// are returned synchronously from a single Promise resolution.
+// rows wraps a JS-side query result: { fields: [{name,...}], rows: [{col: val, ...}] }.
+// We snapshot field names and row values up front because results are
+// returned synchronously from a single Promise resolution.
 type rows struct {
 	cols []string
 	data []js.Value

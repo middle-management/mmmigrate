@@ -1,6 +1,6 @@
 //go:build js && wasm
 
-package pglite
+package jsdb
 
 import (
 	"database/sql/driver"
@@ -9,9 +9,9 @@ import (
 	"time"
 )
 
-// toJS converts a Go driver.Value to a JS value suitable for pglite query
-// parameter binding. database/sql normalizes args to: nil, int64, float64,
-// bool, []byte, string, time.Time.
+// toJS converts a Go driver.Value to a JS value suitable for parameter
+// binding. database/sql normalizes args to: nil, int64, float64, bool,
+// []byte, string, time.Time.
 func toJS(v driver.Value) js.Value {
 	switch x := v.(type) {
 	case nil:
@@ -19,7 +19,6 @@ func toJS(v driver.Value) js.Value {
 	case bool:
 		return js.ValueOf(x)
 	case int64:
-		// JS numbers are float64; values within safe integer range round-trip.
 		return js.ValueOf(float64(x))
 	case float64:
 		return js.ValueOf(x)
@@ -36,9 +35,8 @@ func toJS(v driver.Value) js.Value {
 	}
 }
 
-// fromJS converts a JS value (a column value from pglite) to a Go
-// driver.Value. database/sql handles further conversion to the destination
-// Go type during Rows.Scan.
+// fromJS converts a JS column value to a Go driver.Value. database/sql
+// finishes the conversion to the destination Go type during Rows.Scan.
 func fromJS(v js.Value) driver.Value {
 	switch v.Type() {
 	case js.TypeNull, js.TypeUndefined:
@@ -54,9 +52,9 @@ func fromJS(v js.Value) driver.Value {
 	case js.TypeString:
 		return v.String()
 	case js.TypeObject:
-		// pglite returns Date objects for timestamp columns and Uint8Array
-		// for bytea. Anything else (e.g. JSON objects) is best-effort
-		// stringified via JSON.stringify.
+		// pglite returns Date for timestamps and Uint8Array for bytea.
+		// SQLite returns numbers / strings / Uint8Array. JSON objects
+		// are best-effort stringified.
 		if date := js.Global().Get("Date"); !date.IsUndefined() && v.InstanceOf(date) {
 			return v.Call("toISOString").String()
 		}
@@ -75,8 +73,6 @@ func fromJS(v js.Value) driver.Value {
 	}
 }
 
-// argsToJSArray turns named driver args into a JS Array for pglite's
-// .query(sql, params) call.
 func argsToJSArray(args []driver.NamedValue) js.Value {
 	arr := js.Global().Get("Array").New(len(args))
 	for i, a := range args {

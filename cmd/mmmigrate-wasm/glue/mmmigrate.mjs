@@ -1,9 +1,12 @@
 // JS glue for mmmigrate-wasm.
 //
 // Usage:
-//   import { loadMmmigrate, fs as mmfs } from './mmmigrate.mjs'
+//   import { loadMmmigrate, fs as mmfs, db as mmdb } from './mmmigrate.mjs'
 //   const mm = await loadMmmigrate(fetch('./mmmigrate.wasm'))
-//   await mm.apply(pgliteDb, { fs: mmfs.fromMap({ '001_users.sql': '...' }) })
+//   await mm.apply(pgliteDb, {
+//     fs:      mmfs.fromMap({ '001_users.sql': '...' }),
+//     dialect: 'postgres',  // or 'sqlite'
+//   })
 //
 // The wasm runtime requires Go's `wasm_exec.js` shim to be loaded before
 // instantiation. In the browser, include it via a <script> tag (it sets
@@ -45,6 +48,60 @@ export async function loadMmmigrate(source, opts = {}) {
     throw new Error("mmmigrate: wasm did not register a global namespace")
   }
   return globalThis.mmmigrate
+}
+
+// --- DB adapters ---
+//
+// The wasm bridges to a JS db object exposing the pglite-shaped contract:
+//   {
+//     exec(sql):           Promise<unknown>          // multi-statement OK
+//     query(sql, params):  Promise<{ rows, fields, affectedRows }>
+//   }
+// where rows is an array of { columnName: value } and fields is an array
+// of { name, ... }. PGlite already speaks this directly. For other engines
+// (e.g. @sqlite.org/sqlite-wasm) call adaptSQLiteWasm() to wrap the
+// engine's native API in this shape.
+
+export const db = {
+  adaptSQLiteWasm,
+}
+
+/**
+ * Wrap a `@sqlite.org/sqlite-wasm` `oo1.DB` instance in the pglite-shaped
+ * contract above. The wrapper assumes the in-memory case (synchronous
+ * sqlite calls); OPFS-persistent SQLite needs a Worker and a different
+ * promiser-based bridge.
+ *
+ *   import sqlite3InitModule from '@sqlite.org/sqlite-wasm'
+ *   const sqlite3 = await sqlite3InitModule()
+ *   const db = new sqlite3.oo1.DB(':memory:')
+ *   await mm.apply(mmdb.adaptSQLiteWasm(db), {
+ *     fs: ..., dialect: 'sqlite', applyCurrent: true,
+ *   })
+ */
+export function adaptSQLiteWasm(sqliteDB) {
+  return {
+    async exec(sql) {
+      sqliteDB.exec(sql)
+      return undefined
+    },
+    async query(sql, params) {
+      const rows = []
+      const columnNames = []
+      sqliteDB.exec({
+        sql,
+        bind: params && params.length ? params : undefined,
+        rowMode: "object",
+        callback: (row) => rows.push(row),
+        columnNames,
+      })
+      return {
+        rows,
+        fields: columnNames.map((name) => ({ name })),
+        affectedRows: sqliteDB.changes(),
+      }
+    },
+  }
 }
 
 // --- FS adapters ---
