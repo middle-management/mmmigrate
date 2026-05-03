@@ -1,0 +1,69 @@
+site_name: mmmigrate
+site_description: Forward-only SQL migration tool for PostgreSQL, SQLite, and MySQL.
+site_url: https://middle-management.github.io/mmmigrate/
+repo_url: https://github.com/middle-management/mmmigrate
+repo_name: middle-management/mmmigrate
+edit_uri: edit/main/docs/
+
+strict: true
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - navigation.indexes
+    - content.code.copy
+    - content.tabs.link
+    - content.action.edit
+    - search.suggest
+    - search.highlight
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.snippets
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Workflow: workflow.md
+  - Commands: commands.md
+  - Includes: includes.md
+  - Integrity: integrity.md
+  - Shadow database: shadow-database.md
+  - Concurrency: concurrency.md
+  - Drivers:
+      - drivers/index.md
+      - PostgreSQL: drivers/postgres.md
+      - SQLite: drivers/sqlite.md
+      - MySQL: drivers/mysql.md
+  - Library API: library.md
+  - Migrating from Graphile: migrating-from-graphile.md
+  - FAQ: faq.md
