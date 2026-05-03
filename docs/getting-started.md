@@ -4,6 +4,16 @@ This page walks you through installing mmmigrate, creating your first migration,
 
 ## Install
 
+### Homebrew
+
+```bash
+brew install middle-management/tap/mmmigrate
+```
+
+The formula lives at [middle-management/homebrew-tap](https://github.com/middle-management/homebrew-tap).
+
+### Go install
+
 mmmigrate ships as a single Go binary. Pick the build tag for your database driver — only one driver is compiled in per binary:
 
 === "SQLite"
@@ -23,6 +33,8 @@ mmmigrate ships as a single Go binary. Pick the build tag for your database driv
     ```bash
     go install -tags mysql github.com/middle-management/mmmigrate/cmd/mmmigrate@latest
     ```
+
+### Prebuilt binaries
 
 Prebuilt binaries are also published on [GitHub Releases](https://github.com/middle-management/mmmigrate/releases).
 

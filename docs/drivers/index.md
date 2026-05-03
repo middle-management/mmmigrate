@@ -26,6 +26,8 @@ The CLI is built with **Go build tags** so each binary contains exactly one driv
 
 If you want a single binary that supports more than one driver, build it yourself — the build tags are not mutually exclusive at compile time, just selected one-at-a-time in the published install commands.
 
+The Homebrew formula at [middle-management/homebrew-tap](https://github.com/middle-management/homebrew-tap) ships a prebuilt binary; check the formula for which driver(s) it includes.
+
 ## Per-driver pages
 
 | Page | Highlights |

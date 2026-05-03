@@ -6,19 +6,27 @@ Migrations are plain SQL files. You edit `current.sql` during development, commi
 
 ## Install
 
-=== "SQLite"
+=== "Homebrew"
+
+    ```bash
+    brew install middle-management/tap/mmmigrate
+    ```
+
+    See [middle-management/homebrew-tap](https://github.com/middle-management/homebrew-tap) for the formula.
+
+=== "Go install (SQLite)"
 
     ```bash
     go install -tags sqlite github.com/middle-management/mmmigrate/cmd/mmmigrate@latest
     ```
 
-=== "PostgreSQL"
+=== "Go install (PostgreSQL)"
 
     ```bash
     go install -tags postgres github.com/middle-management/mmmigrate/cmd/mmmigrate@latest
     ```
 
-=== "MySQL"
+=== "Go install (MySQL)"
 
     ```bash
     go install -tags mysql github.com/middle-management/mmmigrate/cmd/mmmigrate@latest

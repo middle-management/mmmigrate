@@ -9,6 +9,9 @@ Migrations are plain SQL files. You edit `current.sql` during development, commi
 ## Install
 
 ```bash
+# Homebrew (https://github.com/middle-management/homebrew-tap)
+brew install middle-management/tap/mmmigrate
+
 # From source (pick your driver)
 go install -tags sqlite   github.com/middle-management/mmmigrate/cmd/mmmigrate@latest
 go install -tags postgres  github.com/middle-management/mmmigrate/cmd/mmmigrate@latest
