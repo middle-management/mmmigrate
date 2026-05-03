@@ -69,6 +69,7 @@ DATABASE_URL="postgres://prod/myapp" mmmigrate apply
 -   **[Shadow database](shadow-database.md)** — verify migrations on a disposable DB before commit.
 -   **[Drivers](drivers/index.md)** — PostgreSQL, SQLite, MySQL specifics.
 -   **[Library API](library.md)** — embed mmmigrate in a Go program.
+-   **[WASM (pglite)](wasm.md)** — run migrations in the browser against pglite.
 -   **[Migrating from Graphile](migrating-from-graphile.md)** — porting notes and feature comparison.
 -   **[FAQ](faq.md)** — common mistakes and troubleshooting.
 

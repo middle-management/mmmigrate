@@ -65,5 +65,6 @@ nav:
       - SQLite: drivers/sqlite.md
       - MySQL: drivers/mysql.md
   - Library API: library.md
+  - WASM (pglite): wasm.md
   - Migrating from Graphile: migrating-from-graphile.md
   - FAQ: faq.md
