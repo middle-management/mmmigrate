@@ -5,9 +5,8 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"fmt"
+	"io/fs"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -16,19 +15,20 @@ import (
 
 // Migrator handles database migrations.
 type Migrator struct {
-	db            *sql.DB
-	dialect       Dialect
-	migrationsDir string
-	applyCurrent  bool
+	db           *sql.DB
+	dialect      Dialect
+	fsys         fs.FS
+	applyCurrent bool
 }
 
-// NewMigrator creates a new migrator instance.
-func NewMigrator(db *sql.DB, dialect Dialect, migrationsDir string, applyCurrent bool) *Migrator {
+// NewMigrator creates a new migrator instance. fsys is the filesystem rooted at
+// the migrations directory.
+func NewMigrator(db *sql.DB, dialect Dialect, fsys fs.FS, applyCurrent bool) *Migrator {
 	return &Migrator{
-		db:            db,
-		dialect:       dialect,
-		migrationsDir: migrationsDir,
-		applyCurrent:  applyCurrent,
+		db:           db,
+		dialect:      dialect,
+		fsys:         fsys,
+		applyCurrent: applyCurrent,
 	}
 }
 
@@ -84,7 +84,7 @@ func (m *Migrator) runCurrentMigration(ctx context.Context, mig *source.Migratio
 		return nil
 	}
 
-	processedSQL, _, err := source.ProcessIncludes(mig.SQL, m.migrationsDir)
+	processedSQL, _, err := source.ProcessIncludes(mig.SQL, m.fsys)
 	if err != nil {
 		return fmt.Errorf("failed to process includes in current.sql: %w", err)
 	}
@@ -215,11 +215,11 @@ func (m *Migrator) Run(ctx context.Context, migrations []*source.Migration) erro
 	return nil
 }
 
-// RunMigrations loads and applies all migrations from the filesystem.
-func RunMigrations(ctx context.Context, db *sql.DB, dialect Dialect, migrationsDir string, applyCurrent bool) error {
-	migrator := NewMigrator(db, dialect, migrationsDir, applyCurrent)
+// RunMigrations loads and applies all migrations from the given filesystem.
+func RunMigrations(ctx context.Context, db *sql.DB, dialect Dialect, fsys fs.FS, applyCurrent bool) error {
+	migrator := NewMigrator(db, dialect, fsys, applyCurrent)
 
-	migrations, err := source.LoadMigrations(migrationsDir, applyCurrent)
+	migrations, err := source.LoadMigrations(fsys, applyCurrent)
 	if err != nil {
 		return fmt.Errorf("failed to load migrations: %w", err)
 	}
@@ -235,8 +235,8 @@ type MigrationStatus struct {
 }
 
 // Status returns the state of all migrations relative to the database.
-func Status(ctx context.Context, db *sql.DB, dialect Dialect, migrationsDir string) ([]MigrationStatus, error) {
-	migrator := NewMigrator(db, dialect, migrationsDir, false)
+func Status(ctx context.Context, db *sql.DB, dialect Dialect, fsys fs.FS) ([]MigrationStatus, error) {
+	migrator := NewMigrator(db, dialect, fsys, false)
 
 	if err := migrator.ensureMigrationsTable(ctx); err != nil {
 		return nil, err
@@ -247,7 +247,7 @@ func Status(ctx context.Context, db *sql.DB, dialect Dialect, migrationsDir stri
 		return nil, err
 	}
 
-	migrations, err := source.LoadMigrations(migrationsDir, false)
+	migrations, err := source.LoadMigrations(fsys, false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load migrations: %w", err)
 	}
@@ -270,8 +270,8 @@ func Status(ctx context.Context, db *sql.DB, dialect Dialect, migrationsDir stri
 }
 
 // DryRun returns the list of migrations that would be applied without executing them.
-func DryRun(ctx context.Context, db *sql.DB, dialect Dialect, migrationsDir string, applyCurrent bool) ([]string, error) {
-	migrator := NewMigrator(db, dialect, migrationsDir, applyCurrent)
+func DryRun(ctx context.Context, db *sql.DB, dialect Dialect, fsys fs.FS, applyCurrent bool) ([]string, error) {
+	migrator := NewMigrator(db, dialect, fsys, applyCurrent)
 
 	if err := migrator.ensureMigrationsTable(ctx); err != nil {
 		return nil, err
@@ -282,7 +282,7 @@ func DryRun(ctx context.Context, db *sql.DB, dialect Dialect, migrationsDir stri
 		return nil, err
 	}
 
-	migrations, err := source.LoadMigrations(migrationsDir, applyCurrent)
+	migrations, err := source.LoadMigrations(fsys, applyCurrent)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load migrations: %w", err)
 	}
@@ -293,7 +293,7 @@ func DryRun(ctx context.Context, db *sql.DB, dialect Dialect, migrationsDir stri
 	for _, mig := range migrations {
 		if mig.IsCurrent {
 			if strings.TrimSpace(mig.SQL) != "" {
-				processedSQL, _, err := source.ProcessIncludes(mig.SQL, migrationsDir)
+				processedSQL, _, err := source.ProcessIncludes(mig.SQL, fsys)
 				if err != nil {
 					return nil, err
 				}
@@ -326,14 +326,14 @@ func DryRun(ctx context.Context, db *sql.DB, dialect Dialect, migrationsDir stri
 
 // VerifyAgainstShadow resets a shadow database and replays all migrations plus
 // current.sql from scratch, verifying the full chain works on a clean database.
-func VerifyAgainstShadow(ctx context.Context, shadowDB *sql.DB, dialect Dialect, migrationsDir string) error {
+func VerifyAgainstShadow(ctx context.Context, shadowDB *sql.DB, dialect Dialect, fsys fs.FS) error {
 	slog.Info("resetting shadow database")
 	if _, err := shadowDB.ExecContext(ctx, dialect.ResetSQL()); err != nil {
 		return fmt.Errorf("failed to reset shadow database: %w", err)
 	}
 
 	slog.Info("replaying all migrations on shadow database")
-	if err := RunMigrations(ctx, shadowDB, dialect, migrationsDir, true); err != nil {
+	if err := RunMigrations(ctx, shadowDB, dialect, fsys, true); err != nil {
 		return fmt.Errorf("shadow replay failed: %w", err)
 	}
 
@@ -342,13 +342,13 @@ func VerifyAgainstShadow(ctx context.Context, shadowDB *sql.DB, dialect Dialect,
 
 // TestCurrentMigration applies current.sql in a transaction and rolls it back,
 // verifying the SQL is valid without making permanent changes.
-func TestCurrentMigration(ctx context.Context, db *sql.DB, migrationsDir string) error {
-	content, err := os.ReadFile(filepath.Join(migrationsDir, "current.sql"))
+func TestCurrentMigration(ctx context.Context, db *sql.DB, fsys fs.FS) error {
+	content, err := fs.ReadFile(fsys, "current.sql")
 	if err != nil {
 		return fmt.Errorf("failed to read current.sql: %w", err)
 	}
 
-	processedSQL, _, err := source.ProcessIncludes(string(content), migrationsDir)
+	processedSQL, _, err := source.ProcessIncludes(string(content), fsys)
 	if err != nil {
 		return fmt.Errorf("failed to process includes: %w", err)
 	}

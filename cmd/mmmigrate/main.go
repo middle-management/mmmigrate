@@ -93,9 +93,10 @@ func cmdApply(args []string) {
 	defer cleanup()
 
 	ctx := context.Background()
+	fsys := os.DirFS(absDir)
 
 	if *dryRun {
-		pending, err := mmmigrate.DryRun(ctx, db, dialect, absDir, *applyCurrent)
+		pending, err := mmmigrate.DryRun(ctx, db, dialect, fsys, *applyCurrent)
 		if err != nil {
 			fatal("%v", err)
 		}
@@ -110,7 +111,7 @@ func cmdApply(args []string) {
 		return
 	}
 
-	if err := mmmigrate.RunMigrations(ctx, db, dialect, absDir, *applyCurrent); err != nil {
+	if err := mmmigrate.RunMigrations(ctx, db, dialect, fsys, *applyCurrent); err != nil {
 		fatal("%v", err)
 	}
 	fmt.Println("✓ Migrations completed successfully")
@@ -139,7 +140,7 @@ func cmdCommit(args []string) {
 
 		ctx := context.Background()
 		fmt.Println("Testing migration against database...")
-		if err := mmmigrate.TestCurrentMigration(ctx, db, absDir); err != nil {
+		if err := mmmigrate.TestCurrentMigration(ctx, db, os.DirFS(absDir)); err != nil {
 			fatal("migration test failed: %v", err)
 		}
 		fmt.Println("✓ Migration test passed")
@@ -163,7 +164,7 @@ func cmdCommit(args []string) {
 
 			ctx := context.Background()
 			fmt.Println("Verifying full migration chain against shadow database...")
-			if err := mmmigrate.VerifyAgainstShadow(ctx, shadowDB, dialect, absDir); err != nil {
+			if err := mmmigrate.VerifyAgainstShadow(ctx, shadowDB, dialect, os.DirFS(absDir)); err != nil {
 				fatal("shadow verification failed: %v", err)
 			}
 			fmt.Println("✓ Shadow database verification passed")
@@ -193,7 +194,7 @@ func cmdStatus(args []string) {
 	defer cleanup()
 
 	ctx := context.Background()
-	statuses, err := mmmigrate.Status(ctx, db, dialect, absDir)
+	statuses, err := mmmigrate.Status(ctx, db, dialect, os.DirFS(absDir))
 	if err != nil {
 		fatal("%v", err)
 	}
@@ -223,7 +224,7 @@ func cmdRender(args []string) {
 	fs.Parse(args)
 
 	absDir := resolveDir(*migrationsDir)
-	rendered, err := source.Render(absDir)
+	rendered, err := source.Render(os.DirFS(absDir))
 	if err != nil {
 		fatal("%v", err)
 	}

@@ -58,7 +58,7 @@ func runWatch(ctx context.Context, db *sql.DB, absDir string, debounce time.Dura
 		absDir, len(paths)-1, debounce)
 
 	apply := func() {
-		if err := mmmigrate.RunMigrations(ctx, db, dialect, absDir, true); err != nil {
+		if err := mmmigrate.RunMigrations(ctx, db, dialect, os.DirFS(absDir), true); err != nil {
 			fmt.Fprintf(os.Stderr, "[%s] Error: %v\n", time.Now().Format("15:04:05"), err)
 		} else {
 			fmt.Printf("[%s] ✓ applied\n", time.Now().Format("15:04:05"))
@@ -135,7 +135,7 @@ func discoverWatchPaths(absDir string) (map[string]bool, error) {
 		return paths, fmt.Errorf("failed to read current.sql: %w", err)
 	}
 
-	_, infos, err := source.ProcessIncludes(string(content), absDir)
+	_, infos, err := source.ProcessIncludes(string(content), os.DirFS(absDir))
 	if err != nil {
 		return paths, fmt.Errorf("failed to process includes: %w", err)
 	}

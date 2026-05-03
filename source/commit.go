@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	_ "embed"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -33,13 +34,13 @@ func Init(migrationsDir string) error {
 }
 
 // Render expands @include directives in current.sql and returns the result.
-func Render(migrationsDir string) (string, error) {
-	content, err := os.ReadFile(filepath.Join(migrationsDir, "current.sql"))
+func Render(fsys fs.FS) (string, error) {
+	content, err := fs.ReadFile(fsys, "current.sql")
 	if err != nil {
 		return "", fmt.Errorf("failed to read current.sql: %w", err)
 	}
 
-	processed, _, err := ProcessIncludes(string(content), migrationsDir)
+	processed, _, err := ProcessIncludes(string(content), fsys)
 	if err != nil {
 		return "", fmt.Errorf("failed to process includes: %w", err)
 	}
@@ -74,7 +75,7 @@ func CommitCurrentMigration(migrationsDir string, description string) error {
 		return fmt.Errorf("current.sql contains only comments, nothing to commit")
 	}
 
-	processedContent, includeInfos, err := ProcessIncludes(string(content), migrationsDir)
+	processedContent, includeInfos, err := ProcessIncludes(string(content), os.DirFS(migrationsDir))
 	if err != nil {
 		return fmt.Errorf("failed to process includes: %w", err)
 	}

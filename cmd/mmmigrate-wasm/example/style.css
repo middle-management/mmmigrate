@@ -1,0 +1,190 @@
+:root {
+  --fg: #1a1a1a;
+  --bg: #fafafa;
+  --muted: #666;
+  --accent: #2266dd;
+  --accent-fg: #fff;
+  --border: #d0d0d0;
+  --hi: #fff7d0;
+  --code-bg: #f0f0f0;
+  --ok: #1c8a3c;
+  --err: #c0392b;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  margin: 0;
+  padding: 1.5rem;
+  max-width: 1100px;
+  margin-inline: auto;
+  color: var(--fg);
+  background: var(--bg);
+}
+
+header h1 { margin-bottom: 0.25rem; }
+header p { color: var(--muted); margin-top: 0; }
+
+code, pre, textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+.tabs {
+  display: flex;
+  gap: 0.25rem;
+  border-bottom: 1px solid var(--border);
+  margin: 1.25rem 0 1rem;
+}
+.tabs button {
+  padding: 0.5rem 1rem;
+  border: 1px solid transparent;
+  border-bottom: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.95rem;
+}
+.tabs button.active {
+  background: white;
+  border-color: var(--border);
+  border-radius: 4px 4px 0 0;
+  margin-bottom: -1px;
+}
+
+.tab { display: none; }
+.tab.active { display: block; }
+
+.hint {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin: 0 0 1rem;
+}
+
+button {
+  padding: 0.45rem 0.9rem;
+  border: 1px solid var(--border);
+  background: white;
+  cursor: pointer;
+  font-size: 0.9rem;
+  border-radius: 3px;
+}
+button:hover { background: var(--code-bg); }
+button.primary {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-color: var(--accent);
+}
+button.primary:hover { filter: brightness(1.1); }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.output {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0.75rem;
+  margin-top: 1rem;
+  white-space: pre-wrap;
+  min-height: 4rem;
+  font-size: 0.85rem;
+  max-height: 24rem;
+  overflow: auto;
+}
+.output[data-status="ok"]  { border-color: var(--ok); }
+.output[data-status="err"] { border-color: var(--err); }
+
+/* ─── Inline editor ────────────────────────────────────────────────── */
+
+.editor { display: grid; gap: 0.75rem; margin-bottom: 1rem; }
+.editor .file {
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: white;
+  overflow: hidden;
+}
+.editor .file header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--code-bg);
+  padding: 0.35rem 0.6rem;
+  font-size: 0.85rem;
+}
+.editor .file textarea {
+  width: 100%;
+  min-height: 6rem;
+  border: none;
+  padding: 0.6rem;
+  resize: vertical;
+  font-size: 0.85rem;
+  outline: none;
+}
+
+/* ─── OPFS explorer ────────────────────────────────────────────────── */
+
+.opfs-layout {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  gap: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: white;
+  min-height: 18rem;
+}
+.opfs-tree {
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+}
+.opfs-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  padding: 0.4rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--code-bg);
+}
+.opfs-toolbar button {
+  font-size: 0.75rem;
+  padding: 0.25rem 0.4rem;
+}
+#opfs-tree-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.4rem;
+  overflow-y: auto;
+  flex: 1;
+}
+#opfs-tree-list li {
+  cursor: pointer;
+  padding: 0.15rem 0.3rem;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#opfs-tree-list li:hover { background: var(--code-bg); }
+#opfs-tree-list li.selected { background: var(--hi); }
+#opfs-tree-list li.dir::before { content: "📁 "; }
+#opfs-tree-list li.file::before { content: "📄 "; }
+
+.opfs-editor { display: flex; flex-direction: column; }
+.opfs-editor-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--code-bg);
+  font-size: 0.85rem;
+}
+#opfs-editor-area {
+  flex: 1;
+  border: none;
+  padding: 0.75rem;
+  font-size: 0.85rem;
+  resize: none;
+  outline: none;
+  min-height: 14rem;
+}
+
+.opfs-actions { margin-top: 0.75rem; }
+
+a { color: var(--accent); }

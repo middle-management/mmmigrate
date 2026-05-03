@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>mmmigrate + pglite (WASM example)</title>
+  <link rel="stylesheet" href="./style.css" />
+  <script src="./wasm_exec.js"></script>
+</head>
+<body>
+  <header>
+    <h1>mmmigrate + pglite</h1>
+    <p>
+      In-browser SQL migrations against pglite. Source lives either in an
+      inline object or in <code>navigator.storage</code> (OPFS) so edits
+      persist across reloads.
+    </p>
+  </header>
+
+  <nav class="tabs">
+    <button data-tab="inline" class="active">Inline (fromMap)</button>
+    <button data-tab="opfs">OPFS</button>
+  </nav>
+
+  <!-- ─── Tab: inline ─────────────────────────────────────────────── -->
+  <section id="tab-inline" class="tab active">
+    <p class="hint">
+      Edit the migration files below. Click <strong>Apply</strong> to run
+      them against an in-memory pglite instance.
+    </p>
+    <div id="inline-editor" class="editor"></div>
+    <button id="inline-apply" class="primary">Apply</button>
+    <pre id="inline-output" class="output" data-status="idle"></pre>
+  </section>
+
+  <!-- ─── Tab: OPFS ───────────────────────────────────────────────── -->
+  <section id="tab-opfs" class="tab">
+    <p class="hint">
+      Migrations live in <code>OPFS:/migrations/</code>. Edits persist across
+      reloads. The tree on the left is a tiny OPFS file explorer (inspired by
+      <a href="https://github.com/mickaelvieira/opfs-explorer" target="_blank" rel="noopener">opfs-explorer</a>).
+    </p>
+    <div class="opfs-layout">
+      <aside class="opfs-tree">
+        <div class="opfs-toolbar">
+          <button id="opfs-refresh" title="Refresh tree">⟳</button>
+          <button id="opfs-new-file" title="New file">＋ file</button>
+          <button id="opfs-new-dir" title="New folder">＋ dir</button>
+          <button id="opfs-delete" title="Delete selected">🗑</button>
+          <button id="opfs-reset" title="Reset to demo seed">reset seed</button>
+        </div>
+        <ul id="opfs-tree-list"></ul>
+      </aside>
+      <div class="opfs-editor">
+        <div class="opfs-editor-header">
+          <span id="opfs-current-path">(no file selected)</span>
+          <button id="opfs-save">Save</button>
+        </div>
+        <textarea id="opfs-editor-area" spellcheck="false" placeholder="Select a file on the left to edit"></textarea>
+      </div>
+    </div>
+    <div class="opfs-actions">
+      <button id="opfs-apply" class="primary">Apply (from OPFS)</button>
+    </div>
+    <pre id="opfs-output" class="output" data-status="idle"></pre>
+  </section>
+
+  <script type="module" src="./app.mjs"></script>
+</body>
+</html>
