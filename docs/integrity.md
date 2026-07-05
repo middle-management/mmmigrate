@@ -19,7 +19,7 @@ CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
 
 | Field | What it is |
 |------|----------|
-| `Checksum` | SHA-256 of the migration body (everything after the header) |
+| `Checksum` | SHA-256 of the migration body (everything after the blank line that ends the header) — the compiled `current.sql`, including any comments it starts with |
 | `Chain` | SHA-256 of `previous_chain || current_checksum` |
 
 The first migration's chain is just the SHA-256 of its checksum. Each subsequent migration folds the previous chain into its own, so any earlier modification cascades and invalidates every later migration.

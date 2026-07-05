@@ -239,6 +239,49 @@ func TestValidatePlainSQLFileOK(t *testing.T) {
 	}
 }
 
+func TestValidateCommitWithLeadingComments(t *testing.T) {
+	dir := t.TempDir()
+
+	// A current.sql that starts with comment (and blank) lines must produce a
+	// migration whose stored checksum matches what validation recomputes.
+	commitMigration(t, dir, "-- add the posts table\n-- part of the blog feature\n\nCREATE TABLE posts (id INTEGER);\n", "leading comments")
+
+	if err := source.ValidateChain(dir); err != nil {
+		t.Errorf("migration committed from comment-led current.sql should validate: %v", err)
+	}
+
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), "001_") {
+			continue
+		}
+		if err := source.ValidateMigrationIntegrity(filepath.Join(dir, e.Name())); err != nil {
+			t.Errorf("expected valid integrity: %v", err)
+		}
+	}
+}
+
+func TestValidateDetectsTamperedBodyComment(t *testing.T) {
+	dir := t.TempDir()
+
+	commitMigration(t, dir, "-- original comment\nCREATE TABLE a (id INTEGER);\n", "commented")
+
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), "001_") {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		content, _ := os.ReadFile(path)
+		tampered := strings.Replace(string(content), "-- original comment", "-- edited comment", 1)
+		os.WriteFile(path, []byte(tampered), 0644)
+
+		if err := source.ValidateMigrationIntegrity(path); err == nil {
+			t.Error("expected integrity check to fail after editing a body comment")
+		}
+	}
+}
+
 // --- Include processing ---
 
 func TestIncludeProcessing(t *testing.T) {
@@ -429,6 +472,21 @@ func TestRevertRestoresIncludes(t *testing.T) {
 	}
 	if !strings.Contains(s, "CREATE TABLE main") {
 		t.Error("reverted current.sql should contain non-included SQL")
+	}
+}
+
+func TestRevertPreservesLeadingComments(t *testing.T) {
+	dir := t.TempDir()
+
+	commitMigration(t, dir, "-- explanatory comment\nCREATE TABLE a (id INTEGER);\n", "commented")
+
+	if err := source.RevertLastMigration(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	current, _ := os.ReadFile(filepath.Join(dir, "current.sql"))
+	if !strings.HasPrefix(string(current), "-- explanatory comment\n") {
+		t.Errorf("reverted current.sql should keep leading comments, got:\n%s", current)
 	}
 }
 
