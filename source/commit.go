@@ -235,10 +235,32 @@ type migrationHeaders struct {
 	HasHeader bool // true if any migration header lines (Migration:, Created:) were found
 }
 
+// splitHeaderBody splits a migration file into its comment header and body.
+// The header is the leading run of comment lines; the first blank line ends
+// it, and the body is everything after that blank line. This makes the body
+// exactly the bytes that were checksummed at commit time (the compiled
+// current.sql, which may itself start with comments or blank lines). Files
+// without a blank separator fall back to starting the body at the first
+// non-comment line.
+func splitHeaderBody(content string) (headerLines []string, body string) {
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			return lines[:i], strings.Join(lines[i+1:], "\n")
+		}
+		if !strings.HasPrefix(trimmed, "--") {
+			return lines[:i], strings.Join(lines[i:], "\n")
+		}
+	}
+	return lines, ""
+}
+
 // extractHeaders parses the comment header of a migration file.
 func extractHeaders(content string) migrationHeaders {
 	var h migrationHeaders
-	for _, line := range strings.Split(content, "\n") {
+	headerLines, _ := splitHeaderBody(content)
+	for _, line := range headerLines {
 		trimmed := strings.TrimSpace(line)
 
 		switch {
@@ -253,8 +275,6 @@ func extractHeaders(content string) migrationHeaders {
 			if parts := strings.SplitN(trimmed, ":", 2); len(parts) == 2 {
 				h.Chain = strings.TrimSpace(parts[1])
 			}
-		case trimmed != "" && !strings.HasPrefix(trimmed, "--"):
-			return h // end of header
 		}
 	}
 	return h
@@ -262,14 +282,8 @@ func extractHeaders(content string) migrationHeaders {
 
 // extractBody returns the migration content after the comment header.
 func extractBody(content string) string {
-	lines := strings.Split(content, "\n")
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed != "" && !strings.HasPrefix(trimmed, "--") {
-			return strings.Join(lines[i:], "\n")
-		}
-	}
-	return ""
+	_, body := splitHeaderBody(content)
+	return body
 }
 
 // ValidateMigrationIntegrity checks if a migration file's content matches its checksum.
@@ -437,6 +451,10 @@ func sanitizeDescription(description string) string {
 func buildMigrationHeader(description, contentChecksum, chainHash string, includeInfos []IncludeInfo) string {
 	var header strings.Builder
 	now := time.Now().UTC()
+
+	// The header must stay a contiguous run of comment lines — the blank line
+	// after it marks where the checksummed body starts.
+	description = strings.ReplaceAll(strings.ReplaceAll(description, "\r", " "), "\n", " ")
 
 	header.WriteString(fmt.Sprintf("-- Migration: %s\n", description))
 	header.WriteString(fmt.Sprintf("-- Created: %s\n", now.Format(time.RFC3339)))
