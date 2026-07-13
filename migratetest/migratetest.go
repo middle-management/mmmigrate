@@ -177,6 +177,8 @@ func Run(t *testing.T, h Harness) {
 	t.Run("TestCurrentRejectsInvalid", func(t *testing.T) { testTestCurrentInvalid(t, h) })
 	t.Run("EmptyDir", func(t *testing.T) { testEmptyDir(t, h) })
 	t.Run("ShadowVerification", func(t *testing.T) { testShadow(t, h) })
+	t.Run("Status", func(t *testing.T) { testStatus(t, h) })
+	t.Run("DryRun", func(t *testing.T) { testDryRun(t, h) })
 }
 
 // testSchema runs the fixture migrations (without current.sql) and compares
@@ -311,6 +313,122 @@ func testShadow(t *testing.T, h Harness) {
 	// Verify the shadow has the expected schema.
 	got := h.DumpSchema(t, shadowDB)
 	CompareGolden(t, got, filepath.Join("testdata", "schema_with_current.golden.sql"))
+}
+
+func testStatus(t *testing.T, h Harness) {
+	db := h.OpenDB(t)
+	dir := SetupFixtures(t)
+	os.Remove(filepath.Join(dir, "current.sql"))
+
+	ctx := context.Background()
+	d := h.Dialect(t)
+	fsys := os.DirFS(dir)
+
+	// Fresh database: everything is pending.
+	statuses, err := mmmigrate.Status(ctx, db, d, fsys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(statuses) != 3 {
+		t.Fatalf("expected 3 statuses, got %d", len(statuses))
+	}
+	for _, s := range statuses {
+		if s.Applied {
+			t.Errorf("migration %d (%s) reported applied on fresh database", s.Version, s.Name)
+		}
+	}
+
+	if err := mmmigrate.RunMigrations(ctx, db, d, fsys, false); err != nil {
+		t.Fatal(err)
+	}
+
+	// Add a new migration that hasn't been applied yet.
+	writeSQL(t, dir, "004_add_tags.sql", `CREATE TABLE tags (id INTEGER PRIMARY KEY);`)
+
+	statuses, err = mmmigrate.Status(ctx, db, d, fsys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(statuses) != 4 {
+		t.Fatalf("expected 4 statuses, got %d", len(statuses))
+	}
+	want := []mmmigrate.MigrationStatus{
+		{Version: 1, Name: "create_users", Applied: true},
+		{Version: 2, Name: "create_posts", Applied: true},
+		{Version: 3, Name: "add_published_at", Applied: true},
+		{Version: 4, Name: "add_tags", Applied: false},
+	}
+	for i, s := range statuses {
+		if s != want[i] {
+			t.Errorf("status[%d] = %+v, want %+v", i, s, want[i])
+		}
+	}
+}
+
+func testDryRun(t *testing.T, h Harness) {
+	db := h.OpenDB(t)
+	dir := SetupFixtures(t)
+
+	ctx := context.Background()
+	d := h.Dialect(t)
+	fsys := os.DirFS(dir)
+
+	// Fresh database: all numbered migrations plus current.sql are pending.
+	pending, err := mmmigrate.DryRun(ctx, db, d, fsys, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"001_create_users.sql", "002_create_posts.sql", "003_add_published_at.sql", "current.sql"}
+	assertStrings(t, "fresh database", pending, want)
+
+	// With applyCurrent=false, current.sql is excluded.
+	pending, err = mmmigrate.DryRun(ctx, db, d, fsys, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertStrings(t, "applyCurrent=false", pending, want[:3])
+
+	// After applying only the numbered migrations, current.sql remains pending.
+	if err := mmmigrate.RunMigrations(ctx, db, d, fsys, false); err != nil {
+		t.Fatal(err)
+	}
+	pending, err = mmmigrate.DryRun(ctx, db, d, fsys, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertStrings(t, "after numbered migrations", pending, []string{"current.sql"})
+
+	// After applying everything, nothing is pending.
+	if err := mmmigrate.RunMigrations(ctx, db, d, fsys, true); err != nil {
+		t.Fatal(err)
+	}
+	pending, err = mmmigrate.DryRun(ctx, db, d, fsys, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertStrings(t, "after all migrations", pending, nil)
+
+	// Changing current.sql makes it pending again.
+	writeSQL(t, dir, "current.sql", `CREATE TABLE IF NOT EXISTS extras (id INTEGER PRIMARY KEY);`)
+	pending, err = mmmigrate.DryRun(ctx, db, d, fsys, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertStrings(t, "after editing current.sql", pending, []string{"current.sql"})
+}
+
+func assertStrings(t *testing.T, label string, got, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Errorf("%s: got %v, want %v", label, got, want)
+		return
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Errorf("%s: got %v, want %v", label, got, want)
+			return
+		}
+	}
 }
 
 func testEmptyDir(t *testing.T, h Harness) {
