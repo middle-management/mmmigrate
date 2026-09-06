@@ -39,6 +39,17 @@ Don't put seed data in migrations. Write a separate seeding script that runs aft
 
 If you really need data that's part of the schema (like enum lookup rows), use `INSERT ... ON CONFLICT DO NOTHING` and accept that it'll only run once per environment.
 
+## How do I start using mmmigrate on a database that already has a schema?
+
+Run [`mmmigrate baseline`](commands.md#baseline) once against it. mmmigrate decides what to run purely from its tracking table, which starts empty, so a plain `apply` would try to re-create objects that already exist:
+
+```bash
+mmmigrate baseline -all           # the schema on disk matches the database
+mmmigrate baseline -version 6     # the database is only up to version 6
+```
+
+That records the migrations as applied without executing them. Anything above the baselined version applies normally afterwards. See [Migrating from Graphile Migrate](migrating-from-graphile.md) for the full adoption path from another tool.
+
 ## Can I have multiple `current.sql` files?
 
 No. There's exactly one drafting surface per migrations directory. If you want concurrent feature branches with separate schema changes, that's what `git` is for — keep each branch's `current.sql` in its branch and resolve at merge time.

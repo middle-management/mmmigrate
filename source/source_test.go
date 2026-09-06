@@ -38,6 +38,10 @@ func TestParseMigrationName(t *testing.T) {
 		{"042_add_users.sql", 42, "add_users", false},
 		{"bad.sql", 0, "", true},
 		{"abc_name.sql", 0, "", true},
+		// Graphile Migrate's committed filenames parse without renaming.
+		{"000001-initial-schema.sql", 1, "initial-schema", false},
+		{"000042-add_users.sql", 42, "add_users", false},
+		{"-001_x.sql", 0, "", true},
 	}
 
 	for _, tt := range tests {
@@ -524,5 +528,177 @@ func TestChainEmptyDir(t *testing.T) {
 
 	if err := source.ValidateChain(dir); err != nil {
 		t.Fatalf("expected no error for empty dir: %v", err)
+	}
+}
+
+// --- committed subdirectory layout ---
+
+// setupCommitted creates a Graphile Migrate-shaped tree: current.sql at the
+// root, numbered migrations under committed/.
+func setupCommitted(t *testing.T, files map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "committed"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+func TestLoadMigrationsFromCommittedDir(t *testing.T) {
+	dir := setupCommitted(t, map[string]string{
+		"committed/000001-initial.sql": "SELECT 1;",
+		"committed/000002-users.sql":   "SELECT 2;",
+		"current.sql":                  "SELECT 3;",
+	})
+
+	migs, err := source.LoadMigrations(os.DirFS(dir), true, source.WithCommittedDir("committed"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(migs) != 3 {
+		t.Fatalf("expected 2 committed migrations plus current.sql, got %d", len(migs))
+	}
+
+	byVersion := map[int]*source.Migration{}
+	for _, m := range migs {
+		byVersion[m.Version] = m
+	}
+	if m := byVersion[1]; m == nil || m.Name != "initial" || m.Filename != "000001-initial.sql" {
+		t.Errorf("version 1 = %+v, want name=initial filename=000001-initial.sql", m)
+	}
+	if m := byVersion[2]; m == nil || m.SQL != "SELECT 2;" {
+		t.Errorf("version 2 = %+v, want SQL 'SELECT 2;'", m)
+	}
+	if m := byVersion[-1]; m == nil || !m.IsCurrent {
+		t.Error("current.sql was not loaded from the migrations root")
+	}
+}
+
+// Root-level .sql files are includes, not migrations, once a committed
+// directory is configured.
+func TestLoadMigrationsCommittedDirIgnoresRootSQL(t *testing.T) {
+	dir := setupCommitted(t, map[string]string{
+		"committed/001_initial.sql": "SELECT 1;",
+		"helper.sql":                "SELECT 'not a migration';",
+	})
+
+	migs, err := source.LoadMigrations(os.DirFS(dir), false, source.WithCommittedDir("committed"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(migs) != 1 {
+		t.Fatalf("expected 1 migration, got %d", len(migs))
+	}
+}
+
+func TestLoadMigrationsMissingCurrentIsNotAnError(t *testing.T) {
+	dir := t.TempDir()
+	writeSQL(t, dir, "001_first.sql", "SELECT 1;")
+
+	migs, err := source.LoadMigrations(os.DirFS(dir), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(migs) != 1 {
+		t.Fatalf("expected 1 migration, got %d", len(migs))
+	}
+}
+
+func TestCommittedDirRejectsEscapingPath(t *testing.T) {
+	dir := t.TempDir()
+	writeSQL(t, dir, "current.sql", "SELECT 1;")
+
+	if _, err := source.LoadMigrations(os.DirFS(dir), false, source.WithCommittedDir("../escape")); err == nil {
+		t.Fatal("expected error for a committed directory outside the migrations directory")
+	}
+	if err := source.ValidateChain(dir, source.WithCommittedDir("/abs")); err == nil {
+		t.Fatal("expected error for an absolute committed directory")
+	}
+}
+
+func TestCommitIntoCommittedDir(t *testing.T) {
+	dir := setupCommitted(t, nil)
+	opt := source.WithCommittedDir("committed")
+
+	writeSQL(t, dir, "current.sql", "CREATE TABLE a (id INT);")
+	if err := source.CommitCurrentMigration(dir, "first", opt); err != nil {
+		t.Fatal(err)
+	}
+
+	// The migration lands in committed/, not next to current.sql.
+	if _, err := os.Stat(filepath.Join(dir, "committed", "001_first.sql")); err != nil {
+		t.Fatalf("expected committed/001_first.sql: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "001_first.sql")); err == nil {
+		t.Error("migration was also written to the migrations root")
+	}
+
+	// A second commit continues the chain from the committed directory.
+	writeSQL(t, dir, "current.sql", "CREATE TABLE b (id INT);")
+	if err := source.CommitCurrentMigration(dir, "second", opt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "committed", "002_second.sql")); err != nil {
+		t.Fatalf("expected committed/002_second.sql: %v", err)
+	}
+	if err := source.ValidateChain(dir, opt); err != nil {
+		t.Errorf("chain validation failed: %v", err)
+	}
+
+	// Revert pulls the last committed migration back out of committed/.
+	if err := source.RevertLastMigration(dir, opt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "committed", "002_second.sql")); !os.IsNotExist(err) {
+		t.Error("reverted migration still present in committed/")
+	}
+	restored, err := os.ReadFile(filepath.Join(dir, "current.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(restored), "CREATE TABLE b") {
+		t.Errorf("current.sql was not restored: %q", restored)
+	}
+}
+
+// Committing continues the numbering of a Graphile Migrate chain that was
+// carried over as-is.
+func TestCommitContinuesGraphileNumbering(t *testing.T) {
+	dir := setupCommitted(t, map[string]string{
+		"committed/000006-existing.sql": "SELECT 1;",
+	})
+	opt := source.WithCommittedDir("committed")
+
+	writeSQL(t, dir, "current.sql", "CREATE TABLE a (id INT);")
+	if err := source.CommitCurrentMigration(dir, "next", opt); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "committed", "007_next.sql")); err != nil {
+		t.Fatalf("expected committed/007_next.sql: %v", err)
+	}
+	// The pre-existing file carries no mmmigrate header, so it is skipped by
+	// validation rather than failing it.
+	if err := source.ValidateChain(dir, opt); err != nil {
+		t.Errorf("chain validation failed: %v", err)
+	}
+}
+
+func TestInitCreatesCommittedDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "migrations")
+
+	if err := source.Init(dir, source.WithCommittedDir("committed")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "committed")); err != nil {
+		t.Errorf("committed directory not created: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "current.sql")); err != nil {
+		t.Errorf("current.sql not created: %v", err)
 	}
 }

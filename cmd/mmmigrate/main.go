@@ -20,6 +20,7 @@ const usage = `Usage: mmmigrate <command> [flags]
 Commands:
   init       Initialize a new migrations directory
   apply      Run all pending migrations
+  baseline   Record migrations as applied without running them
   commit     Commit current.sql to a numbered migration
   revert     Revert last committed migration back to current.sql
   status     Show migration status
@@ -46,6 +47,8 @@ func main() {
 		cmdInit(args)
 	case "apply":
 		cmdApply(args)
+	case "baseline":
+		cmdBaseline(args)
 	case "commit":
 		cmdCommit(args)
 	case "revert":
@@ -69,34 +72,62 @@ func main() {
 	}
 }
 
+// dirFlags are the migration-location flags shared by most commands.
+type dirFlags struct {
+	migrations *string
+	committed  *string
+}
+
+func addDirFlags(fs *flag.FlagSet) *dirFlags {
+	return &dirFlags{
+		migrations: fs.String("migrations", "migrations", "Path to migrations directory"),
+		committed:  fs.String("committed", "", "Subdirectory of -migrations holding committed migrations (defaults to MMMIGRATE_COMMITTED, else alongside current.sql)"),
+	}
+}
+
+// dir returns the absolute path of the migrations directory.
+func (d *dirFlags) dir() string { return resolveDir(*d.migrations) }
+
+// opts returns the layout options the flags select. The slice is usable as
+// both []mmmigrate.Option and []source.Option — they are the same type.
+func (d *dirFlags) opts() []mmmigrate.Option {
+	committed := *d.committed
+	if committed == "" {
+		committed = os.Getenv("MMMIGRATE_COMMITTED")
+	}
+	if committed == "" {
+		return nil
+	}
+	return []mmmigrate.Option{mmmigrate.WithCommittedDir(committed)}
+}
+
 func cmdInit(args []string) {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
-	migrationsDir := fs.String("migrations", "migrations", "Path to migrations directory")
+	dirs := addDirFlags(fs)
 	fs.Parse(args)
 
-	if err := source.Init(*migrationsDir); err != nil {
+	if err := source.Init(*dirs.migrations, dirs.opts()...); err != nil {
 		fatal("%v", err)
 	}
-	fmt.Printf("✓ Initialized %s\n", *migrationsDir)
+	fmt.Printf("✓ Initialized %s\n", *dirs.migrations)
 }
 
 func cmdApply(args []string) {
 	fs := flag.NewFlagSet("apply", flag.ExitOnError)
 	databaseURL := fs.String("database-url", "", "Database connection URL (defaults to DATABASE_URL env var)")
-	migrationsDir := fs.String("migrations", "migrations", "Path to migrations directory")
+	dirs := addDirFlags(fs)
 	applyCurrent := fs.Bool("current", false, "Also apply current.sql (development mode)")
 	dryRun := fs.Bool("dry-run", false, "Show what would be applied without executing")
 	fs.Parse(args)
 
-	absDir := resolveDir(*migrationsDir)
 	db, cleanup := openDB(*databaseURL)
 	defer cleanup()
 
 	ctx := context.Background()
-	fsys := os.DirFS(absDir)
+	fsys := os.DirFS(dirs.dir())
 
 	if *dryRun {
-		pending, err := mmmigrate.DryRun(ctx, db, dialect, fsys, *applyCurrent)
+		pending, err := mmmigrate.DryRun(ctx, db, dialect, fsys, *applyCurrent, dirs.opts()...)
 		if err != nil {
 			fatal("%v", err)
 		}
@@ -111,7 +142,7 @@ func cmdApply(args []string) {
 		return
 	}
 
-	if err := mmmigrate.RunMigrations(ctx, db, dialect, fsys, *applyCurrent); err != nil {
+	if err := mmmigrate.RunMigrations(ctx, db, dialect, fsys, *applyCurrent, dirs.opts()...); err != nil {
 		fatal("%v", err)
 	}
 	fmt.Println("✓ Migrations completed successfully")
@@ -121,7 +152,7 @@ func cmdCommit(args []string) {
 	fs := flag.NewFlagSet("commit", flag.ExitOnError)
 	databaseURL := fs.String("database-url", "", "Database connection URL (defaults to DATABASE_URL env var)")
 	shadowURL := fs.String("shadow-url", "", "Shadow database URL for full replay verification (defaults to SHADOW_DATABASE_URL env var)")
-	migrationsDir := fs.String("migrations", "migrations", "Path to migrations directory")
+	dirs := addDirFlags(fs)
 	description := fs.String("description", "", "Description for the committed migration (required)")
 	skipVerify := fs.Bool("skip-verify", false, "Skip migration verification (commit without testing against a database)")
 	fs.Parse(args)
@@ -132,7 +163,7 @@ func cmdCommit(args []string) {
 		os.Exit(1)
 	}
 
-	absDir := resolveDir(*migrationsDir)
+	absDir := dirs.dir()
 
 	if !*skipVerify {
 		db, cleanup := openDB(*databaseURL)
@@ -146,7 +177,7 @@ func cmdCommit(args []string) {
 		fmt.Println("✓ Migration test passed")
 	}
 
-	if err := source.CommitCurrentMigration(absDir, *description); err != nil {
+	if err := source.CommitCurrentMigration(absDir, *description, dirs.opts()...); err != nil {
 		fatal("%v", err)
 	}
 
@@ -164,7 +195,7 @@ func cmdCommit(args []string) {
 
 			ctx := context.Background()
 			fmt.Println("Verifying full migration chain against shadow database...")
-			if err := mmmigrate.VerifyAgainstShadow(ctx, shadowDB, dialect, os.DirFS(absDir)); err != nil {
+			if err := mmmigrate.VerifyAgainstShadow(ctx, shadowDB, dialect, os.DirFS(absDir), dirs.opts()...); err != nil {
 				fatal("shadow verification failed: %v", err)
 			}
 			fmt.Println("✓ Shadow database verification passed")
@@ -174,11 +205,10 @@ func cmdCommit(args []string) {
 
 func cmdRevert(args []string) {
 	fs := flag.NewFlagSet("revert", flag.ExitOnError)
-	migrationsDir := fs.String("migrations", "migrations", "Path to migrations directory")
+	dirs := addDirFlags(fs)
 	fs.Parse(args)
 
-	absDir := resolveDir(*migrationsDir)
-	if err := source.RevertLastMigration(absDir); err != nil {
+	if err := source.RevertLastMigration(dirs.dir(), dirs.opts()...); err != nil {
 		fatal("%v", err)
 	}
 }
@@ -186,15 +216,15 @@ func cmdRevert(args []string) {
 func cmdStatus(args []string) {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
 	databaseURL := fs.String("database-url", "", "Database connection URL (defaults to DATABASE_URL env var)")
-	migrationsDir := fs.String("migrations", "migrations", "Path to migrations directory")
+	dirs := addDirFlags(fs)
 	fs.Parse(args)
 
-	absDir := resolveDir(*migrationsDir)
+	absDir := dirs.dir()
 	db, cleanup := openDB(*databaseURL)
 	defer cleanup()
 
 	ctx := context.Background()
-	statuses, err := mmmigrate.Status(ctx, db, dialect, os.DirFS(absDir))
+	statuses, err := mmmigrate.Status(ctx, db, dialect, os.DirFS(absDir), dirs.opts()...)
 	if err != nil {
 		fatal("%v", err)
 	}
@@ -209,7 +239,7 @@ func cmdStatus(args []string) {
 		if s.Applied {
 			mark = "✓ "
 		}
-		fmt.Printf("%s%03d_%s\n", mark, s.Version, s.Name)
+		fmt.Printf("%s%s\n", mark, s.Filename)
 	}
 
 	// Also show current.sql status.
@@ -245,14 +275,55 @@ func cmdCheck(args []string) {
 
 func cmdValidate(args []string) {
 	fs := flag.NewFlagSet("validate", flag.ExitOnError)
-	migrationsDir := fs.String("migrations", "migrations", "Path to migrations directory")
+	dirs := addDirFlags(fs)
 	fs.Parse(args)
 
-	absDir := resolveDir(*migrationsDir)
-	if err := source.ValidateChain(absDir); err != nil {
+	if err := source.ValidateChain(dirs.dir(), dirs.opts()...); err != nil {
 		fatal("validation failed: %v", err)
 	}
 	fmt.Println("✓ All migrations verified (checksums and chain integrity)")
+}
+
+func cmdBaseline(args []string) {
+	fs := flag.NewFlagSet("baseline", flag.ExitOnError)
+	databaseURL := fs.String("database-url", "", "Database connection URL (defaults to DATABASE_URL env var)")
+	dirs := addDirFlags(fs)
+	version := fs.Int("version", 0, "Record migrations up to and including this version as applied")
+	all := fs.Bool("all", false, "Record every migration on disk as applied")
+	fs.Parse(args)
+
+	switch {
+	case *all && *version != 0:
+		fatal("-all and -version are mutually exclusive")
+	case !*all && *version <= 0:
+		fmt.Fprintln(os.Stderr, "Error: one of -version or -all is required")
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	through := *version
+	if *all {
+		through = mmmigrate.AllVersions
+	}
+
+	db, cleanup := openDB(*databaseURL)
+	defer cleanup()
+
+	ctx := context.Background()
+	recorded, err := mmmigrate.Baseline(ctx, db, dialect, os.DirFS(dirs.dir()), through, dirs.opts()...)
+	if err != nil {
+		fatal("%v", err)
+	}
+
+	if len(recorded) == 0 {
+		fmt.Println("Nothing to baseline — every selected migration is already recorded as applied")
+		return
+	}
+
+	fmt.Printf("✓ Recorded %d migration(s) as applied without running them:\n", len(recorded))
+	for _, s := range recorded {
+		fmt.Printf("    %s\n", s.Filename)
+	}
 }
 
 func resolveDir(dir string) string {

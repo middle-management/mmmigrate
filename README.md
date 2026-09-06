@@ -49,6 +49,7 @@ DATABASE_URL="postgres://prod/myapp" mmmigrate apply
 |---------|----------|-------------|
 | `init` | no | Create migrations directory and empty current.sql |
 | `apply [-current] [-dry-run]` | yes | Run pending migrations. `-current` includes current.sql |
+| `baseline {-version N \| -all}` | yes | Record migrations as applied without running them |
 | `commit -description "..." [-shadow-url URL] [-skip-verify]` | yes* | Test and commit current.sql as a numbered migration |
 | `revert` | no | Uncommit last migration back to current.sql |
 | `status` | yes | Show which migrations are applied/pending |
@@ -60,7 +61,7 @@ DATABASE_URL="postgres://prod/myapp" mmmigrate apply
 
 *`commit` does not need a database connection when `-skip-verify` is used.
 
-All commands accept `-migrations DIR` (default `migrations`). Database commands accept `-database-url URL` (default `DATABASE_URL` env).
+All commands accept `-migrations DIR` (default `migrations`). Database commands accept `-database-url URL` (default `DATABASE_URL` env). Commands that touch committed migrations also accept `-committed SUBDIR` (default `MMMIGRATE_COMMITTED` env) to keep numbered migrations in a subdirectory instead of alongside current.sql.
 
 ## Learn more
 

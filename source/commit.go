@@ -15,13 +15,19 @@ import (
 //go:embed current.sql.template
 var emptyCurrentSQLTemplate string
 
-// Init creates the migrations directory and an empty current.sql file.
-func Init(migrationsDir string) error {
-	if err := os.MkdirAll(migrationsDir, 0755); err != nil {
+// Init creates the migrations directory and an empty current.sql file. When a
+// committed subdirectory is configured it is created too.
+func Init(migrationsDir string, opts ...Option) error {
+	cfg, err := newConfig(opts)
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(committedPath(migrationsDir, cfg), 0755); err != nil {
 		return fmt.Errorf("failed to create migrations directory: %w", err)
 	}
 
-	currentPath := filepath.Join(migrationsDir, "current.sql")
+	currentPath := filepath.Join(migrationsDir, CurrentFile)
 	if _, err := os.Stat(currentPath); err == nil {
 		return fmt.Errorf("migrations directory already initialized (%s exists)", currentPath)
 	}
@@ -35,7 +41,7 @@ func Init(migrationsDir string) error {
 
 // Render expands @include directives in current.sql and returns the result.
 func Render(fsys fs.FS) (string, error) {
-	content, err := fs.ReadFile(fsys, "current.sql")
+	content, err := fs.ReadFile(fsys, CurrentFile)
 	if err != nil {
 		return "", fmt.Errorf("failed to read current.sql: %w", err)
 	}
@@ -49,8 +55,18 @@ func Render(fsys fs.FS) (string, error) {
 }
 
 // CommitCurrentMigration converts current.sql to a numbered migration file.
-func CommitCurrentMigration(migrationsDir string, description string) error {
-	currentPath := filepath.Join(migrationsDir, "current.sql")
+func CommitCurrentMigration(migrationsDir string, description string, opts ...Option) error {
+	cfg, err := newConfig(opts)
+	if err != nil {
+		return err
+	}
+
+	committedDir := committedPath(migrationsDir, cfg)
+	if err := os.MkdirAll(committedDir, 0755); err != nil {
+		return fmt.Errorf("failed to create committed directory: %w", err)
+	}
+
+	currentPath := filepath.Join(migrationsDir, CurrentFile)
 
 	content, err := os.ReadFile(currentPath)
 	if err != nil {
@@ -83,7 +99,7 @@ func CommitCurrentMigration(migrationsDir string, description string) error {
 	contentChecksum := fmt.Sprintf("%x", sha256.Sum256([]byte(processedContent)))
 
 	// Compute chain hash from existing migrations.
-	prevChain, err := getLastChainHash(migrationsDir)
+	prevChain, err := getLastChainHash(committedDir)
 	if err != nil {
 		return fmt.Errorf("failed to read chain: %w", err)
 	}
@@ -92,13 +108,13 @@ func CommitCurrentMigration(migrationsDir string, description string) error {
 	header := buildMigrationHeader(description, contentChecksum, chainHash, includeInfos)
 	finalContent := header + "\n" + processedContent
 
-	nextVersion, err := getNextMigrationVersion(migrationsDir)
+	nextVersion, err := getNextMigrationVersion(committedDir)
 	if err != nil {
 		return fmt.Errorf("failed to determine next migration version: %w", err)
 	}
 
 	filename := fmt.Sprintf("%03d_%s.sql", nextVersion, sanitizeDescription(description))
-	newPath := filepath.Join(migrationsDir, filename)
+	newPath := filepath.Join(committedDir, filename)
 
 	// Write atomically via temp file + rename.
 	if err := atomicWriteFile(newPath, []byte(finalContent)); err != nil {
@@ -113,6 +129,14 @@ func CommitCurrentMigration(migrationsDir string, description string) error {
 	fmt.Printf("✓ Cleared current.sql\n")
 
 	return nil
+}
+
+// committedPath resolves the directory holding numbered migrations.
+func committedPath(migrationsDir string, cfg config) string {
+	if cfg.committed == "" {
+		return migrationsDir
+	}
+	return filepath.Join(migrationsDir, filepath.FromSlash(cfg.committed))
 }
 
 // atomicWriteFile writes data to a temp file then renames it into place.
@@ -130,7 +154,7 @@ func atomicWriteFile(path string, data []byte) error {
 
 // CheckDirtyCurrent returns an error if current.sql contains uncommitted changes.
 func CheckDirtyCurrent(migrationsDir string) error {
-	currentPath := filepath.Join(migrationsDir, "current.sql")
+	currentPath := filepath.Join(migrationsDir, CurrentFile)
 
 	content, err := os.ReadFile(currentPath)
 	if err != nil {
@@ -153,13 +177,19 @@ func CheckDirtyCurrent(migrationsDir string) error {
 
 // RevertLastMigration converts the last committed migration back to current.sql,
 // restoring @include directives from the compiled include markers.
-func RevertLastMigration(migrationsDir string) error {
+func RevertLastMigration(migrationsDir string, opts ...Option) error {
+	cfg, err := newConfig(opts)
+	if err != nil {
+		return err
+	}
+
 	// Ensure current.sql is clean before reverting.
 	if err := CheckDirtyCurrent(migrationsDir); err != nil {
 		return fmt.Errorf("cannot revert: %w", err)
 	}
 
-	files, err := listMigrationFiles(migrationsDir)
+	committedDir := committedPath(migrationsDir, cfg)
+	files, err := listMigrationFiles(committedDir)
 	if err != nil {
 		return err
 	}
@@ -168,7 +198,7 @@ func RevertLastMigration(migrationsDir string) error {
 	}
 
 	last := files[len(files)-1]
-	path := filepath.Join(migrationsDir, last.filename)
+	path := filepath.Join(committedDir, last.filename)
 
 	content, err := os.ReadFile(path)
 	if err != nil {
@@ -178,7 +208,7 @@ func RevertLastMigration(migrationsDir string) error {
 	body := extractBody(string(content))
 	restored := decompileIncludes(body)
 
-	currentPath := filepath.Join(migrationsDir, "current.sql")
+	currentPath := filepath.Join(migrationsDir, CurrentFile)
 	if err := atomicWriteFile(currentPath, []byte(restored)); err != nil {
 		return fmt.Errorf("failed to write current.sql: %w", err)
 	}
@@ -314,15 +344,21 @@ func ValidateMigrationIntegrity(filePath string) error {
 
 // ValidateChain walks all numbered migrations in order and verifies both
 // content checksums and the merkle chain.
-func ValidateChain(migrationsDir string) error {
-	files, err := listMigrationFiles(migrationsDir)
+func ValidateChain(migrationsDir string, opts ...Option) error {
+	cfg, err := newConfig(opts)
+	if err != nil {
+		return err
+	}
+
+	committedDir := committedPath(migrationsDir, cfg)
+	files, err := listMigrationFiles(committedDir)
 	if err != nil {
 		return err
 	}
 
 	prevChain := ""
 	for _, f := range files {
-		content, err := os.ReadFile(filepath.Join(migrationsDir, f.filename))
+		content, err := os.ReadFile(filepath.Join(committedDir, f.filename))
 		if err != nil {
 			return fmt.Errorf("%s: %w", f.filename, err)
 		}
@@ -365,15 +401,17 @@ type migFile struct {
 	filename string
 }
 
-func listMigrationFiles(migrationsDir string) ([]migFile, error) {
-	entries, err := os.ReadDir(migrationsDir)
+// listMigrationFiles returns the numbered migrations in committedDir, sorted
+// by version.
+func listMigrationFiles(committedDir string) ([]migFile, error) {
+	entries, err := os.ReadDir(committedDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read migrations directory: %w", err)
 	}
 
 	var files []migFile
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") || entry.Name() == "current.sql" {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") || entry.Name() == CurrentFile {
 			continue
 		}
 		version, _, err := ParseMigrationName(entry.Name())
@@ -392,8 +430,8 @@ func computeChainHash(previousChain, contentChecksum string) string {
 	return fmt.Sprintf("%x", h)
 }
 
-func getLastChainHash(migrationsDir string) (string, error) {
-	files, err := listMigrationFiles(migrationsDir)
+func getLastChainHash(committedDir string) (string, error) {
+	files, err := listMigrationFiles(committedDir)
 	if err != nil {
 		return "", err
 	}
@@ -403,7 +441,7 @@ func getLastChainHash(migrationsDir string) (string, error) {
 	}
 
 	last := files[len(files)-1]
-	content, err := os.ReadFile(filepath.Join(migrationsDir, last.filename))
+	content, err := os.ReadFile(filepath.Join(committedDir, last.filename))
 	if err != nil {
 		return "", fmt.Errorf("failed to read %s: %w", last.filename, err)
 	}
@@ -412,8 +450,8 @@ func getLastChainHash(migrationsDir string) (string, error) {
 	return h.Chain, nil // empty string if no chain header (pre-chain migration)
 }
 
-func getNextMigrationVersion(migrationsDir string) (int, error) {
-	files, err := listMigrationFiles(migrationsDir)
+func getNextMigrationVersion(committedDir string) (int, error) {
+	files, err := listMigrationFiles(committedDir)
 	if err != nil {
 		return 0, err
 	}

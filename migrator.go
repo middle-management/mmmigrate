@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"math"
 	"sort"
 	"strings"
 
@@ -215,11 +216,20 @@ func (m *Migrator) Run(ctx context.Context, migrations []*source.Migration) erro
 	return nil
 }
 
+// Option configures where mmmigrate looks for migration files. See
+// [source.WithCommittedDir].
+type Option = source.Option
+
+// WithCommittedDir places numbered migrations in a subdirectory of the
+// migrations directory instead of alongside current.sql, for projects that
+// keep a Graphile Migrate-style migrations/committed/ layout.
+func WithCommittedDir(dir string) Option { return source.WithCommittedDir(dir) }
+
 // RunMigrations loads and applies all migrations from the given filesystem.
-func RunMigrations(ctx context.Context, db *sql.DB, dialect Dialect, fsys fs.FS, applyCurrent bool) error {
+func RunMigrations(ctx context.Context, db *sql.DB, dialect Dialect, fsys fs.FS, applyCurrent bool, opts ...Option) error {
 	migrator := NewMigrator(db, dialect, fsys, applyCurrent)
 
-	migrations, err := source.LoadMigrations(fsys, applyCurrent)
+	migrations, err := source.LoadMigrations(fsys, applyCurrent, opts...)
 	if err != nil {
 		return fmt.Errorf("failed to load migrations: %w", err)
 	}
@@ -231,11 +241,13 @@ func RunMigrations(ctx context.Context, db *sql.DB, dialect Dialect, fsys fs.FS,
 type MigrationStatus struct {
 	Version int
 	Name    string
-	Applied bool
+	// Filename is the base name of the file on disk.
+	Filename string
+	Applied  bool
 }
 
 // Status returns the state of all migrations relative to the database.
-func Status(ctx context.Context, db *sql.DB, dialect Dialect, fsys fs.FS) ([]MigrationStatus, error) {
+func Status(ctx context.Context, db *sql.DB, dialect Dialect, fsys fs.FS, opts ...Option) ([]MigrationStatus, error) {
 	migrator := NewMigrator(db, dialect, fsys, false)
 
 	if err := migrator.ensureMigrationsTable(ctx); err != nil {
@@ -247,7 +259,7 @@ func Status(ctx context.Context, db *sql.DB, dialect Dialect, fsys fs.FS) ([]Mig
 		return nil, err
 	}
 
-	migrations, err := source.LoadMigrations(fsys, false)
+	migrations, err := source.LoadMigrations(fsys, false, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load migrations: %w", err)
 	}
@@ -259,18 +271,14 @@ func Status(ctx context.Context, db *sql.DB, dialect Dialect, fsys fs.FS) ([]Mig
 	var statuses []MigrationStatus
 	for _, mig := range migrations {
 		_, isApplied := applied[mig.Version]
-		statuses = append(statuses, MigrationStatus{
-			Version: mig.Version,
-			Name:    mig.Name,
-			Applied: isApplied,
-		})
+		statuses = append(statuses, statusOf(mig, isApplied))
 	}
 
 	return statuses, nil
 }
 
 // DryRun returns the list of migrations that would be applied without executing them.
-func DryRun(ctx context.Context, db *sql.DB, dialect Dialect, fsys fs.FS, applyCurrent bool) ([]string, error) {
+func DryRun(ctx context.Context, db *sql.DB, dialect Dialect, fsys fs.FS, applyCurrent bool, opts ...Option) ([]string, error) {
 	migrator := NewMigrator(db, dialect, fsys, applyCurrent)
 
 	if err := migrator.ensureMigrationsTable(ctx); err != nil {
@@ -282,7 +290,7 @@ func DryRun(ctx context.Context, db *sql.DB, dialect Dialect, fsys fs.FS, applyC
 		return nil, err
 	}
 
-	migrations, err := source.LoadMigrations(fsys, applyCurrent)
+	migrations, err := source.LoadMigrations(fsys, applyCurrent, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load migrations: %w", err)
 	}
@@ -316,7 +324,7 @@ func DryRun(ctx context.Context, db *sql.DB, dialect Dialect, fsys fs.FS, applyC
 	var result []string
 	for _, mig := range numbered {
 		if _, ok := applied[mig.Version]; !ok {
-			result = append(result, fmt.Sprintf("%03d_%s.sql", mig.Version, mig.Name))
+			result = append(result, filenameOf(mig))
 		}
 	}
 	result = append(result, pending...)
@@ -326,14 +334,14 @@ func DryRun(ctx context.Context, db *sql.DB, dialect Dialect, fsys fs.FS, applyC
 
 // VerifyAgainstShadow resets a shadow database and replays all migrations plus
 // current.sql from scratch, verifying the full chain works on a clean database.
-func VerifyAgainstShadow(ctx context.Context, shadowDB *sql.DB, dialect Dialect, fsys fs.FS) error {
+func VerifyAgainstShadow(ctx context.Context, shadowDB *sql.DB, dialect Dialect, fsys fs.FS, opts ...Option) error {
 	slog.Info("resetting shadow database")
 	if _, err := shadowDB.ExecContext(ctx, dialect.ResetSQL()); err != nil {
 		return fmt.Errorf("failed to reset shadow database: %w", err)
 	}
 
 	slog.Info("replaying all migrations on shadow database")
-	if err := RunMigrations(ctx, shadowDB, dialect, fsys, true); err != nil {
+	if err := RunMigrations(ctx, shadowDB, dialect, fsys, true, opts...); err != nil {
 		return fmt.Errorf("shadow replay failed: %w", err)
 	}
 
@@ -343,7 +351,7 @@ func VerifyAgainstShadow(ctx context.Context, shadowDB *sql.DB, dialect Dialect,
 // TestCurrentMigration applies current.sql in a transaction and rolls it back,
 // verifying the SQL is valid without making permanent changes.
 func TestCurrentMigration(ctx context.Context, db *sql.DB, fsys fs.FS) error {
-	content, err := fs.ReadFile(fsys, "current.sql")
+	content, err := fs.ReadFile(fsys, source.CurrentFile)
 	if err != nil {
 		return fmt.Errorf("failed to read current.sql: %w", err)
 	}
@@ -369,4 +377,111 @@ func TestCurrentMigration(ctx context.Context, db *sql.DB, fsys fs.FS) error {
 
 	// Rollback is intentional — this is a dry run. The defer handles it.
 	return nil
+}
+
+// AllVersions marks every migration on disk as applied when passed to
+// [Baseline].
+const AllVersions = math.MaxInt
+
+// Baseline records committed migrations as applied without executing their
+// SQL, and returns the ones it recorded.
+//
+// It exists for adopting mmmigrate on a database whose schema is already in
+// place — one migrated by another tool, or restored from a snapshot. Only
+// migrations up to and including through are recorded; pass [AllVersions] for
+// every migration on disk. Versions already recorded are left untouched, so
+// repeated calls are safe.
+//
+// Baseline never inspects the schema: it is the caller's assertion that the
+// database already contains everything those migrations would have created.
+func Baseline(ctx context.Context, db *sql.DB, dialect Dialect, fsys fs.FS, through int, opts ...Option) ([]MigrationStatus, error) {
+	migrations, err := source.LoadMigrations(fsys, false, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load migrations: %w", err)
+	}
+
+	sort.Slice(migrations, func(i, j int) bool {
+		return migrations[i].Version < migrations[j].Version
+	})
+
+	if through != AllVersions && !hasVersion(migrations, through) {
+		return nil, fmt.Errorf("no migration with version %d found on disk", through)
+	}
+
+	migrator := NewMigrator(db, dialect, fsys, false)
+
+	if err := migrator.acquireLock(ctx); err != nil {
+		return nil, err
+	}
+	defer migrator.releaseLock(ctx)
+
+	if err := migrator.ensureMigrationsTable(ctx); err != nil {
+		return nil, err
+	}
+
+	applied, err := migrator.getAppliedMigrations(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var recorded []MigrationStatus
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to start transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	for _, mig := range migrations {
+		if mig.Version > through {
+			break
+		}
+		if _, ok := applied[mig.Version]; ok {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, dialect.InsertApplied(), mig.Version, mig.Name); err != nil {
+			return nil, fmt.Errorf("failed to record migration %d: %w", mig.Version, err)
+		}
+		recorded = append(recorded, statusOf(mig, true))
+	}
+
+	if len(recorded) == 0 {
+		return nil, nil
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit baseline: %w", err)
+	}
+
+	for _, s := range recorded {
+		slog.Info("baselined migration", "version", s.Version, "name", s.Name)
+	}
+
+	return recorded, nil
+}
+
+func hasVersion(migrations []*source.Migration, version int) bool {
+	for _, mig := range migrations {
+		if mig.Version == version {
+			return true
+		}
+	}
+	return false
+}
+
+func statusOf(mig *source.Migration, applied bool) MigrationStatus {
+	return MigrationStatus{
+		Version:  mig.Version,
+		Name:     mig.Name,
+		Filename: filenameOf(mig),
+		Applied:  applied,
+	}
+}
+
+// filenameOf returns the migration's file name, falling back to the canonical
+// form for migrations not loaded from disk.
+func filenameOf(mig *source.Migration) string {
+	if mig.Filename != "" {
+		return mig.Filename
+	}
+	return fmt.Sprintf("%03d_%s.sql", mig.Version, mig.Name)
 }

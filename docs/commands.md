@@ -2,12 +2,15 @@
 
 All commands accept `-migrations DIR` (default: `migrations`). Database commands accept `-database-url URL`, defaulting to the `DATABASE_URL` environment variable.
 
+Commands that touch committed migrations also accept `-committed SUBDIR`, which reads and writes numbered migrations in a subdirectory of `-migrations` instead of alongside `current.sql`; it defaults to the `MMMIGRATE_COMMITTED` environment variable. `current.sql` and `@include` paths always resolve from the migrations root. This is mainly for projects keeping a [Graphile Migrate](migrating-from-graphile.md)-style `migrations/committed/` layout.
+
 ## Reference
 
 | Command | Needs DB | Description |
 |---------|----------|-------------|
 | [`init`](#init) | no | Create migrations directory and empty `current.sql` |
 | [`apply`](#apply) | yes | Run pending migrations (`-current` includes `current.sql`, `-dry-run` shows what would run) |
+| [`baseline`](#baseline) | yes | Record migrations as applied without running them |
 | [`commit`](#commit) | yes\* | Test and commit `current.sql` as a numbered migration |
 | [`revert`](#revert) | no | Uncommit last migration back to `current.sql` |
 | [`status`](#status) | yes | Show which migrations are applied/pending |
@@ -41,6 +44,19 @@ Runs all pending committed migrations in version order. Already-applied migratio
 With `-current`, mmmigrate also runs `current.sql` after the numbered migrations. It's re-run only when the checksum changes since the last apply.
 
 With `-dry-run`, mmmigrate prints the SQL it would execute without committing anything to the database.
+
+## `baseline`
+
+```bash
+mmmigrate baseline -all           # every migration on disk
+mmmigrate baseline -version 6     # everything up to and including version 6
+```
+
+Records committed migrations in the tracking table **without executing their SQL**, and prints what it recorded. Use it to adopt mmmigrate on a database whose schema is already in place — one migrated by another tool, or restored from a snapshot — where a plain `apply` would fail trying to re-create objects that already exist.
+
+Exactly one of `-version N` or `-all` is required. Migrations above `N` are left pending and apply normally on the next `apply`. Versions already recorded are left untouched, so re-running is safe, and an unknown `-version` is rejected before the database is touched.
+
+`baseline` never inspects the schema — it records your assertion that those migrations are already reflected in the database. Check `mmmigrate status` first.
 
 ## `commit`
 

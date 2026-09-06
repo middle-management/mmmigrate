@@ -8,6 +8,7 @@ mmmigrate borrows the `current.sql` workflow from [Graphile Migrate](https://git
 |---|---|---|
 | **Language** | Node.js | Go (single binary, no runtime) |
 | **Databases** | PostgreSQL only | PostgreSQL, SQLite, and MySQL via pluggable drivers |
+| **Layout** | `current.sql` + `committed/NNNNNN-name.sql` | Flat by default, or the same `committed/` layout via `-committed` |
 | **Integrity** | SHA-1 hash chain (`--! Hash:`) | SHA-256 checksums + merkle chain (`-- Chain:`) |
 | **Includes** | `--! include` from a fixtures folder | `-- @include` from migrations subdirectories, restored on revert |
 | **Shadow DB** | Required, auto-created via root DB connection | Optional (`-shadow-url`), user-managed |
@@ -29,9 +30,9 @@ Graphile Migrate is PostgreSQL-only. If that's still your target, install:
 go install -tags postgres github.com/middle-management/mmmigrate/cmd/mmmigrate@latest
 ```
 
-### 2. Move your migrations directory
+### 2. Point mmmigrate at your migrations directory
 
-Graphile's default layout is `migrations/current.sql` plus `migrations/committed/NNNNNNNNNN-name.sql`. mmmigrate keeps everything flat under `migrations/`:
+Graphile's default layout is `migrations/current.sql` plus `migrations/committed/000001-name.sql`. mmmigrate defaults to a flat directory, with numbered migrations alongside `current.sql`:
 
 ```
 migrations/
@@ -41,12 +42,29 @@ migrations/
 └── ...
 ```
 
-You'll need to:
+Both tools default to a `migrations/` directory and both keep the development file at `migrations/current.sql`, so nothing has to move. For the committed files you have two options.
 
-- Move `current.sql` to the new path (often unchanged).
-- Either re-commit your committed migrations from scratch (recommended for a clean chain), or rewrite the headers to match mmmigrate's format and recompute checksums.
+**Keep Graphile's layout.** `-committed` names a subdirectory to read numbered migrations from:
 
-For most projects, re-committing is simpler: drop your existing `committed/` directory, snapshot your production schema as the new `001`, and start the chain fresh.
+```bash
+mmmigrate apply -committed committed
+export MMMIGRATE_COMMITTED=committed   # or set it once, for CI and local shells
+```
+
+Every command that touches committed migrations accepts the flag (`init`, `apply`, `baseline`, `commit`, `revert`, `status`, `validate`, `watch`). `current.sql` and `@include` paths always resolve from the migrations root regardless, and with `-committed` set, loose `.sql` files at the root are treated as includable fixtures rather than migrations.
+
+**Or flatten it:**
+
+```bash
+git mv migrations/committed/*.sql migrations/
+rmdir migrations/committed
+```
+
+Either way, **the filenames can stay as they are**. mmmigrate accepts `-` as well as `_` between the version and the name, so `000001-initial-schema.sql` parses as version 1. Your next `mmmigrate commit` writes mmmigrate's own `NNN_name.sql` form and continues the numbering — commit after `000006-add-users.sql` and you get `007_<description>.sql`. Ordering is by parsed version, so the mixed padding is cosmetic.
+
+Graphile's `--! Previous:` and `--! Hash:` headers are ordinary SQL comments to mmmigrate. `validate` skips files that carry no mmmigrate `-- Checksum:` header rather than failing on them, so carried-over migrations validate as-is and the merkle chain starts at your first mmmigrate commit.
+
+What does have to change is the *content* of `current.sql` — includes and placeholders, covered next.
 
 ### 3. Convert include directives
 
@@ -74,7 +92,28 @@ mmmigrate has no `beforeReset`/`afterReset`/`beforeAll`/`afterAll` equivalents. 
 - **Reset hooks** — call your own scripts before/after pointing mmmigrate at a shadow database.
 - **Permission/role setup** — include the `GRANT`/`REVOKE` SQL directly in a migration.
 
-### 6. Re-set up shadow database
+### 6. Baseline your existing databases
+
+This is the step that bites. mmmigrate decides what to run purely from its own tracking table — `mmmigrate.applied` on PostgreSQL, `mmmigrate_applied` on SQLite and MySQL — and that table starts empty. Point a fresh mmmigrate at a database Graphile has already migrated and it replays the chain from the top:
+
+```
+Error: failed to execute migration 1 (initial): ERROR: relation "users" already exists
+```
+
+`baseline` records migrations as applied **without executing their SQL**:
+
+```bash
+mmmigrate baseline -all           # every migration on disk
+mmmigrate baseline -version 6     # everything up to and including version 6
+```
+
+Run it once against each database that already has the schema — production, staging, every developer's local copy — after deploying the mmmigrate binary and before the first `apply`. Use `-version N` where a database is behind: anything above `N` stays pending and applies normally on the next `apply`.
+
+`baseline` never inspects the schema. It takes your word that those migrations are already reflected in the database, so compare `mmmigrate status` against Graphile's `graphile_migrate.migrations` table before running it. Re-running is safe — already-recorded versions are left alone.
+
+A brand-new database needs no baseline; `apply` builds it from nothing.
+
+### 7. Re-set up shadow database
 
 Graphile auto-creates the shadow database via a root connection; mmmigrate expects it to exist. Create it once:
 
@@ -85,7 +124,7 @@ export SHADOW_DATABASE_URL="postgres://localhost/myapp_shadow"
 
 mmmigrate will reset and replay it on every `mmmigrate commit -shadow-url ...`. See [Shadow database](shadow-database.md) for details.
 
-### 7. Update CI
+### 8. Update CI
 
 Replace any `graphile-migrate` invocations in CI:
 
@@ -98,12 +137,15 @@ mmmigrate apply
 mmmigrate check && mmmigrate validate
 ```
 
+If you kept the `committed/` layout, set `MMMIGRATE_COMMITTED=committed` in the CI environment so every invocation picks it up.
+
 ## What you gain
 
 - **Single binary, no Node runtime.** Deploy mmmigrate alongside your Go services or as a small static binary anywhere.
 - **SQLite and MySQL support.** Useful for tests (SQLite) and projects on managed MySQL.
 - **A documented library API.** Embed mmmigrate directly in your Go application.
 - **A merkle chain.** Stronger tamper detection than Graphile's hash-each-file approach.
+- **An adoption path.** `baseline` lets an existing database start being tracked by mmmigrate without replaying its history.
 
 ## What you give up
 
