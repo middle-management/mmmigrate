@@ -609,15 +609,40 @@ func TestLoadMigrationsMissingCurrentIsNotAnError(t *testing.T) {
 	}
 }
 
-func TestCommittedDirRejectsEscapingPath(t *testing.T) {
+// The committed directory is always relative to the migrations directory. A
+// path that points outside it is rejected rather than reinterpreted.
+func TestCommittedDirRejectsPathOutsideMigrationsDir(t *testing.T) {
 	dir := t.TempDir()
 	writeSQL(t, dir, "current.sql", "SELECT 1;")
 
-	if _, err := source.LoadMigrations(os.DirFS(dir), false, source.WithCommittedDir("../escape")); err == nil {
-		t.Fatal("expected error for a committed directory outside the migrations directory")
+	for _, committed := range []string{"../escape", "/abs/path", "committed/../.."} {
+		_, err := source.LoadMigrations(os.DirFS(dir), false, source.WithCommittedDir(committed))
+		if err == nil {
+			t.Errorf("WithCommittedDir(%q): expected an error", committed)
+			continue
+		}
+		if !strings.Contains(err.Error(), "invalid committed directory") {
+			t.Errorf("WithCommittedDir(%q): got %v, want an invalid-directory error", committed, err)
+		}
+
+		if err := source.ValidateChain(dir, source.WithCommittedDir(committed)); err == nil {
+			t.Errorf("ValidateChain with committed dir %q: expected an error", committed)
+		}
 	}
-	if err := source.ValidateChain(dir, source.WithCommittedDir("/abs")); err == nil {
-		t.Fatal("expected error for an absolute committed directory")
+}
+
+// A trailing separator is cosmetic.
+func TestCommittedDirTrailingSlash(t *testing.T) {
+	dir := setupCommitted(t, map[string]string{
+		"committed/001_initial.sql": "SELECT 1;",
+	})
+
+	migs, err := source.LoadMigrations(os.DirFS(dir), false, source.WithCommittedDir("committed/"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(migs) != 1 {
+		t.Fatalf("expected 1 migration, got %d", len(migs))
 	}
 }
 

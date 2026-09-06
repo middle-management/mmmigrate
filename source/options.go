@@ -28,7 +28,10 @@ type config struct {
 // "." selects the default flat layout.
 func WithCommittedDir(dir string) Option {
 	return func(c *config) {
-		c.committed = strings.Trim(strings.TrimSpace(dir), "/")
+		// Only a trailing separator is cosmetic. A leading one makes the path
+		// absolute, which newConfig rejects rather than quietly reinterpreting
+		// as relative.
+		c.committed = strings.TrimRight(strings.TrimSpace(dir), "/")
 	}
 }
 

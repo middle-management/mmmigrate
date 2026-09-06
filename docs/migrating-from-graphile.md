@@ -51,7 +51,7 @@ mmmigrate apply -committed committed
 export MMMIGRATE_COMMITTED=committed   # or set it once, for CI and local shells
 ```
 
-Every command that touches committed migrations accepts the flag (`init`, `apply`, `baseline`, `commit`, `revert`, `status`, `validate`, `watch`). `current.sql` and `@include` paths always resolve from the migrations root regardless, and with `-committed` set, loose `.sql` files at the root are treated as includable fixtures rather than migrations.
+Every command that touches committed migrations accepts the flag (`init`, `apply`, `baseline`, `commit`, `revert`, `status`, `validate`, `watch`). The value is a path relative to `-migrations` — so with `-migrations db/migrations` the example above reads `db/migrations/committed/`. `current.sql` and `@include` paths always resolve from the migrations root regardless, and with `-committed` set, loose `.sql` files at the root are treated as includable fixtures rather than migrations.
 
 **Or flatten it:**
 
