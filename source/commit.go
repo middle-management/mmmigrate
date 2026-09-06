@@ -18,13 +18,16 @@ var emptyCurrentSQLTemplate string
 // Init creates the migrations directory and an empty current.sql file. When a
 // committed subdirectory is configured it is created too.
 func Init(migrationsDir string, opts ...Option) error {
-	cfg, err := newConfig(opts)
+	committedDir, err := newConfig(opts).path(migrationsDir)
 	if err != nil {
 		return err
 	}
 
-	if err := os.MkdirAll(committedPath(migrationsDir, cfg), 0755); err != nil {
+	if err := os.MkdirAll(migrationsDir, 0755); err != nil {
 		return fmt.Errorf("failed to create migrations directory: %w", err)
+	}
+	if err := os.MkdirAll(committedDir, 0755); err != nil {
+		return fmt.Errorf("failed to create committed directory: %w", err)
 	}
 
 	currentPath := filepath.Join(migrationsDir, CurrentFile)
@@ -56,12 +59,11 @@ func Render(fsys fs.FS) (string, error) {
 
 // CommitCurrentMigration converts current.sql to a numbered migration file.
 func CommitCurrentMigration(migrationsDir string, description string, opts ...Option) error {
-	cfg, err := newConfig(opts)
+	committedDir, err := newConfig(opts).path(migrationsDir)
 	if err != nil {
 		return err
 	}
 
-	committedDir := committedPath(migrationsDir, cfg)
 	if err := os.MkdirAll(committedDir, 0755); err != nil {
 		return fmt.Errorf("failed to create committed directory: %w", err)
 	}
@@ -131,14 +133,6 @@ func CommitCurrentMigration(migrationsDir string, description string, opts ...Op
 	return nil
 }
 
-// committedPath resolves the directory holding numbered migrations.
-func committedPath(migrationsDir string, cfg config) string {
-	if cfg.committed == "" {
-		return migrationsDir
-	}
-	return filepath.Join(migrationsDir, filepath.FromSlash(cfg.committed))
-}
-
 // atomicWriteFile writes data to a temp file then renames it into place.
 func atomicWriteFile(path string, data []byte) error {
 	tmp := path + ".tmp"
@@ -178,7 +172,7 @@ func CheckDirtyCurrent(migrationsDir string) error {
 // RevertLastMigration converts the last committed migration back to current.sql,
 // restoring @include directives from the compiled include markers.
 func RevertLastMigration(migrationsDir string, opts ...Option) error {
-	cfg, err := newConfig(opts)
+	committedDir, err := newConfig(opts).path(migrationsDir)
 	if err != nil {
 		return err
 	}
@@ -188,7 +182,6 @@ func RevertLastMigration(migrationsDir string, opts ...Option) error {
 		return fmt.Errorf("cannot revert: %w", err)
 	}
 
-	committedDir := committedPath(migrationsDir, cfg)
 	files, err := listMigrationFiles(committedDir)
 	if err != nil {
 		return err
@@ -345,12 +338,11 @@ func ValidateMigrationIntegrity(filePath string) error {
 // ValidateChain walks all numbered migrations in order and verifies both
 // content checksums and the merkle chain.
 func ValidateChain(migrationsDir string, opts ...Option) error {
-	cfg, err := newConfig(opts)
+	committedDir, err := newConfig(opts).path(migrationsDir)
 	if err != nil {
 		return err
 	}
 
-	committedDir := committedPath(migrationsDir, cfg)
 	files, err := listMigrationFiles(committedDir)
 	if err != nil {
 		return err

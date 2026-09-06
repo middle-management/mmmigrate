@@ -13,13 +13,11 @@ import (
 const CurrentFile = "current.sql"
 
 // LoadMigrations reads all .sql files from the migrations FS rooted at ".".
-// current.sql is read from the root; numbered migrations come from the
-// subdirectory named by WithCommittedDir, or from the root if none is set.
+// current.sql is read from that root; numbered migrations come from the
+// location named by WithCommittedDir or WithCommittedFS, and from the same
+// root when neither is set.
 func LoadMigrations(fsys fs.FS, loadCurrent bool, opts ...Option) ([]*Migration, error) {
-	cfg, err := newConfig(opts)
-	if err != nil {
-		return nil, err
-	}
+	cfg := newConfig(opts)
 
 	var migrations []*Migration
 
@@ -41,8 +39,12 @@ func LoadMigrations(fsys fs.FS, loadCurrent bool, opts ...Option) ([]*Migration,
 		}
 	}
 
-	dir := cfg.dir()
-	entries, err := fs.ReadDir(fsys, dir)
+	committed, err := cfg.fsys(fsys)
+	if err != nil {
+		return nil, err
+	}
+
+	entries, err := fs.ReadDir(committed, ".")
 	if err != nil {
 		return nil, fmt.Errorf("failed to read migrations directory: %w", err)
 	}
@@ -64,7 +66,7 @@ func LoadMigrations(fsys fs.FS, loadCurrent bool, opts ...Option) ([]*Migration,
 		}
 		seen[version] = entry.Name()
 
-		content, err := fs.ReadFile(fsys, cfg.join(entry.Name()))
+		content, err := fs.ReadFile(committed, entry.Name())
 		if err != nil {
 			return nil, fmt.Errorf("failed to read migration file %s: %w", entry.Name(), err)
 		}

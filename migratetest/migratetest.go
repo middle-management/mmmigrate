@@ -521,7 +521,9 @@ func testBaselineUnknownVersion(t *testing.T, h Harness) {
 }
 
 // testCommittedDir runs the same fixtures from a Graphile Migrate-style
-// migrations/committed/ layout and expects an identical schema.
+// migrations/committed/ layout and expects an identical schema. The committed
+// directory is an ordinary path, so it need not be under the migrations
+// directory at all.
 func testCommittedDir(t *testing.T, h Harness) {
 	db := h.OpenDB(t)
 	dir := SetupFixtures(t)
@@ -544,7 +546,7 @@ func testCommittedDir(t *testing.T, h Harness) {
 	}
 
 	ctx := context.Background()
-	opt := mmmigrate.WithCommittedDir("committed")
+	opt := mmmigrate.WithCommittedDir(committed)
 
 	// current.sql and its includes still resolve from the migrations root.
 	if err := mmmigrate.RunMigrations(ctx, db, h.Dialect(t), os.DirFS(dir), true, opt); err != nil {

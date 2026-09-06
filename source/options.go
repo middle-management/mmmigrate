@@ -3,8 +3,7 @@ package source
 import (
 	"fmt"
 	"io/fs"
-	"path"
-	"strings"
+	"os"
 )
 
 // Option configures where mmmigrate looks for migration files.
@@ -12,69 +11,84 @@ type Option func(*config)
 
 // config is the resolved form of the Options passed to a call.
 type config struct {
-	// committed is the slash-separated subdirectory of the migrations
-	// directory that holds numbered migrations. Empty means they sit at the
-	// root, alongside current.sql.
-	committed string
+	// committedDir is a real filesystem path holding numbered migrations.
+	// Empty means they sit alongside current.sql in the migrations directory.
+	committedDir string
+	// committedFS holds numbered migrations in a virtual filesystem. It takes
+	// precedence over committedDir and rules out file-writing operations.
+	committedFS fs.FS
 }
 
-// WithCommittedDir places numbered migrations in a subdirectory of the
-// migrations directory instead of alongside current.sql. current.sql and
-// @include paths are always resolved from the migrations root regardless.
+// WithCommittedDir reads and writes numbered migrations in the given
+// directory instead of alongside current.sql. The path is a real filesystem
+// path, absolute or relative to the working directory — the same way the CLI's
+// -migrations is interpreted — so the committed migrations may live anywhere,
+// inside the migrations directory or outside it.
 //
-// This exists mainly for projects coming from Graphile Migrate, whose layout
-// is migrations/current.sql plus migrations/committed/NNNNNN-name.sql:
-// WithCommittedDir("committed") reads that tree in place. An empty string or
-// "." selects the default flat layout.
+// current.sql and @include paths always resolve from the migrations directory
+// regardless. An empty string selects the default layout.
+//
+// A project coming from Graphile Migrate keeps its tree in place with
+// WithCommittedDir("migrations/committed").
 func WithCommittedDir(dir string) Option {
 	return func(c *config) {
-		// Only a trailing separator is cosmetic. A leading one makes the path
-		// absolute, which newConfig rejects rather than quietly reinterpreting
-		// as relative.
-		c.committed = strings.TrimRight(strings.TrimSpace(dir), "/")
+		c.committedDir = dir
+		c.committedFS = nil
 	}
 }
 
-// newConfig applies opts and validates the result.
-func newConfig(opts []Option) (config, error) {
+// WithCommittedFS reads numbered migrations from an arbitrary filesystem
+// rooted at the committed directory — an embedded FS, or an fs.Sub of one.
+// Use it where the migrations are not on disk; the file-writing operations
+// (Init, CommitCurrentMigration, RevertLastMigration) reject it.
+func WithCommittedFS(fsys fs.FS) Option {
+	return func(c *config) {
+		c.committedFS = fsys
+		c.committedDir = ""
+	}
+}
+
+// newConfig applies opts.
+func newConfig(opts []Option) config {
 	var c config
 	for _, opt := range opts {
 		opt(&c)
 	}
-
-	if c.committed == "" {
-		return c, nil
-	}
-
-	c.committed = path.Clean(c.committed)
-	if c.committed == "." {
-		c.committed = ""
-		return c, nil
-	}
-
-	// fs.ValidPath rejects absolute paths and anything containing "..", which
-	// is exactly what must not escape the migrations directory.
-	if !fs.ValidPath(c.committed) {
-		return c, fmt.Errorf("invalid committed directory %q: must be a relative path inside the migrations directory", c.committed)
-	}
-
-	return c, nil
+	return c
 }
 
-// dir returns the slash-separated directory holding numbered migrations,
-// relative to the migrations root. "." when the layout is flat.
-func (c config) dir() string {
-	if c.committed == "" {
-		return "."
+// fsys returns the filesystem holding numbered migrations, rooted at the
+// committed directory. root is the migrations directory, used when no
+// committed location is configured.
+func (c config) fsys(root fs.FS) (fs.FS, error) {
+	switch {
+	case c.committedFS != nil:
+		return c.committedFS, nil
+	case c.committedDir != "":
+		// Check the directory here: an os.DirFS rooted at a missing path only
+		// fails later, reporting the path as ".", which tells nobody which
+		// directory was wrong.
+		info, err := os.Stat(c.committedDir)
+		if err != nil {
+			return nil, fmt.Errorf("committed migrations directory: %w", err)
+		}
+		if !info.IsDir() {
+			return nil, fmt.Errorf("committed migrations directory %s is not a directory", c.committedDir)
+		}
+		return os.DirFS(c.committedDir), nil
+	default:
+		return root, nil
 	}
-	return c.committed
 }
 
-// join returns the path of a committed migration file relative to the
-// migrations root.
-func (c config) join(filename string) string {
-	if c.committed == "" {
-		return filename
+// path returns the directory holding numbered migrations for operations that
+// write files. migrationsDir is used when no committed directory is set.
+func (c config) path(migrationsDir string) (string, error) {
+	if c.committedFS != nil {
+		return "", fmt.Errorf("committed migrations were supplied as a filesystem: use WithCommittedDir for operations that write files")
 	}
-	return path.Join(c.committed, filename)
+	if c.committedDir != "" {
+		return c.committedDir, nil
+	}
+	return migrationsDir, nil
 }

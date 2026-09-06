@@ -81,7 +81,7 @@ type dirFlags struct {
 func addDirFlags(fs *flag.FlagSet) *dirFlags {
 	return &dirFlags{
 		migrations: fs.String("migrations", "migrations", "Path to migrations directory"),
-		committed:  fs.String("committed", "", "Subdirectory of -migrations holding committed migrations (defaults to MMMIGRATE_COMMITTED, else alongside current.sql)"),
+		committed:  fs.String("committed", "", "Path to the directory holding committed migrations (defaults to MMMIGRATE_COMMITTED, else alongside current.sql)"),
 	}
 }
 
@@ -98,7 +98,9 @@ func (d *dirFlags) opts() []mmmigrate.Option {
 	if committed == "" {
 		return nil
 	}
-	return []mmmigrate.Option{mmmigrate.WithCommittedDir(committed)}
+	// Resolved like -migrations: absolute, or relative to the working
+	// directory. The committed migrations need not live under -migrations.
+	return []mmmigrate.Option{mmmigrate.WithCommittedDir(resolveDir(committed))}
 }
 
 func cmdInit(args []string) {

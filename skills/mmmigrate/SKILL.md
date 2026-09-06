@@ -50,7 +50,7 @@ edit current.sql → apply -current (dev, iterate) → commit → apply (prod)
 
 All commands accept `-migrations DIR` (default: `migrations`). DB commands accept `-database-url URL` (default: `DATABASE_URL` env).
 
-Commands that touch committed migrations also accept `-committed SUBDIR` (default: `MMMIGRATE_COMMITTED` env), which keeps numbered migrations in a subdirectory of `-migrations` (path relative to it, not to cwd) instead of alongside current.sql — for projects on a Graphile Migrate-style `migrations/committed/` layout. current.sql and `@include` paths still resolve from the migrations root.
+Commands that touch committed migrations also accept `-committed DIR` (default: `MMMIGRATE_COMMITTED` env), which keeps numbered migrations in another directory instead of alongside current.sql — for projects on a Graphile Migrate-style `migrations/committed/` layout. Like `-migrations`, the path is absolute or relative to cwd (so `-committed migrations/committed`, NOT `-committed committed`), and may point outside the migrations directory. current.sql and `@include` paths still resolve from `-migrations`.
 
 Migration filenames may separate version and name with `_` or `-`: `001_add_users.sql` and `000001-add-users.sql` both parse as version 1.
 

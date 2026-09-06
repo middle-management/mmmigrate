@@ -61,7 +61,7 @@ DATABASE_URL="postgres://prod/myapp" mmmigrate apply
 
 *`commit` does not need a database connection when `-skip-verify` is used.
 
-All commands accept `-migrations DIR` (default `migrations`). Database commands accept `-database-url URL` (default `DATABASE_URL` env). Commands that touch committed migrations also accept `-committed SUBDIR` (default `MMMIGRATE_COMMITTED` env) to keep numbered migrations in a subdirectory instead of alongside current.sql.
+All commands accept `-migrations DIR` (default `migrations`). Database commands accept `-database-url URL` (default `DATABASE_URL` env). Commands that touch committed migrations also accept `-committed DIR` (default `MMMIGRATE_COMMITTED` env) to keep numbered migrations in another directory instead of alongside current.sql; like `-migrations`, it is resolved from the working directory.
 
 ## Learn more
 

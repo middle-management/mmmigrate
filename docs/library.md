@@ -78,13 +78,21 @@ mmmigrate.RunMigrations(ctx, db, postgres.Dialect{}, sub, false)
 recorded, err := mmmigrate.Baseline(ctx, db, postgres.Dialect{}, fsys, mmmigrate.AllVersions)
 ```
 
-Every function above takes optional trailing `mmmigrate.Option` values. The only one today is `mmmigrate.WithCommittedDir("committed")`, which reads numbered migrations from a subdirectory of the migrations root instead of alongside `current.sql`:
+Every function above takes optional trailing `mmmigrate.Option` values, which say where the numbered migrations live when they are not alongside `current.sql`:
 
 ```go
-mmmigrate.RunMigrations(ctx, db, postgres.Dialect{}, fsys, false, mmmigrate.WithCommittedDir("committed"))
+// A real directory: absolute, or relative to the working directory. It need
+// not be under the migrations directory.
+mmmigrate.RunMigrations(ctx, db, postgres.Dialect{}, fsys, false,
+    mmmigrate.WithCommittedDir("migrations/committed"))
+
+// Or any filesystem, for migrations that aren't on disk.
+sub, _ := fs.Sub(embedded, "migrations/committed")
+mmmigrate.RunMigrations(ctx, db, postgres.Dialect{}, fsys, false,
+    mmmigrate.WithCommittedFS(sub))
 ```
 
-The `source` functions that operate on a directory path (`Init`, `CommitCurrentMigration`, `RevertLastMigration`, `ValidateChain`) accept the same option.
+`current.sql` and `@include` paths always resolve from `fsys`. The `source` functions that operate on a directory path (`Init`, `CommitCurrentMigration`, `RevertLastMigration`, `ValidateChain`) accept `WithCommittedDir` too; they reject `WithCommittedFS`, since they write files.
 
 For lower-level control, construct a `Migrator` directly:
 

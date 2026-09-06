@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/middle-management/mmmigrate/source"
 )
@@ -534,7 +535,8 @@ func TestChainEmptyDir(t *testing.T) {
 // --- committed subdirectory layout ---
 
 // setupCommitted creates a Graphile Migrate-shaped tree: current.sql at the
-// root, numbered migrations under committed/.
+// root, numbered migrations under committed/. It returns the migrations
+// directory; the committed directory is "committed" inside it.
 func setupCommitted(t *testing.T, files map[string]string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -556,7 +558,7 @@ func TestLoadMigrationsFromCommittedDir(t *testing.T) {
 		"current.sql":                  "SELECT 3;",
 	})
 
-	migs, err := source.LoadMigrations(os.DirFS(dir), true, source.WithCommittedDir("committed"))
+	migs, err := source.LoadMigrations(os.DirFS(dir), true, source.WithCommittedDir(filepath.Join(dir, "committed")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -587,7 +589,7 @@ func TestLoadMigrationsCommittedDirIgnoresRootSQL(t *testing.T) {
 		"helper.sql":                "SELECT 'not a migration';",
 	})
 
-	migs, err := source.LoadMigrations(os.DirFS(dir), false, source.WithCommittedDir("committed"))
+	migs, err := source.LoadMigrations(os.DirFS(dir), false, source.WithCommittedDir(filepath.Join(dir, "committed")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -609,35 +611,51 @@ func TestLoadMigrationsMissingCurrentIsNotAnError(t *testing.T) {
 	}
 }
 
-// The committed directory is always relative to the migrations directory. A
-// path that points outside it is rejected rather than reinterpreted.
-func TestCommittedDirRejectsPathOutsideMigrationsDir(t *testing.T) {
-	dir := t.TempDir()
-	writeSQL(t, dir, "current.sql", "SELECT 1;")
+// The committed directory is an ordinary path, so it may live outside the
+// migrations directory entirely.
+func TestCommittedDirOutsideMigrationsDir(t *testing.T) {
+	base := t.TempDir()
+	migrations := filepath.Join(base, "migrations")
+	committed := filepath.Join(base, "db", "committed")
+	if err := os.MkdirAll(migrations, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(committed, 0755); err != nil {
+		t.Fatal(err)
+	}
+	opt := source.WithCommittedDir(committed)
 
-	for _, committed := range []string{"../escape", "/abs/path", "committed/../.."} {
-		_, err := source.LoadMigrations(os.DirFS(dir), false, source.WithCommittedDir(committed))
-		if err == nil {
-			t.Errorf("WithCommittedDir(%q): expected an error", committed)
-			continue
-		}
-		if !strings.Contains(err.Error(), "invalid committed directory") {
-			t.Errorf("WithCommittedDir(%q): got %v, want an invalid-directory error", committed, err)
-		}
+	writeSQL(t, migrations, "current.sql", "CREATE TABLE a (id INT);")
+	if err := source.CommitCurrentMigration(migrations, "first", opt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(committed, "001_first.sql")); err != nil {
+		t.Fatalf("expected the migration in the sibling directory: %v", err)
+	}
 
-		if err := source.ValidateChain(dir, source.WithCommittedDir(committed)); err == nil {
-			t.Errorf("ValidateChain with committed dir %q: expected an error", committed)
-		}
+	migs, err := source.LoadMigrations(os.DirFS(migrations), false, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(migs) != 1 || migs[0].Version != 1 {
+		t.Fatalf("expected version 1 loaded from outside the migrations dir, got %+v", migs)
+	}
+	if err := source.ValidateChain(migrations, opt); err != nil {
+		t.Errorf("chain validation failed: %v", err)
 	}
 }
 
-// A trailing separator is cosmetic.
-func TestCommittedDirTrailingSlash(t *testing.T) {
-	dir := setupCommitted(t, map[string]string{
-		"committed/001_initial.sql": "SELECT 1;",
-	})
+// A relative committed directory resolves against the working directory, the
+// same way the CLI's -migrations does.
+func TestCommittedDirRelativeToWorkingDirectory(t *testing.T) {
+	base := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(base, "migrations", "committed"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeSQL(t, filepath.Join(base, "migrations", "committed"), "001_first.sql", "SELECT 1;")
+	t.Chdir(base)
 
-	migs, err := source.LoadMigrations(os.DirFS(dir), false, source.WithCommittedDir("committed/"))
+	migs, err := source.LoadMigrations(os.DirFS("migrations"), false, source.WithCommittedDir("migrations/committed"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -646,9 +664,36 @@ func TestCommittedDirTrailingSlash(t *testing.T) {
 	}
 }
 
+// WithCommittedFS covers migrations that are not on disk. It is read-only.
+func TestCommittedFS(t *testing.T) {
+	dir := t.TempDir()
+	writeSQL(t, dir, "current.sql", "SELECT 1;")
+
+	committed := fstest.MapFS{
+		"001_first.sql":  &fstest.MapFile{Data: []byte("SELECT 1;")},
+		"002_second.sql": &fstest.MapFile{Data: []byte("SELECT 2;")},
+	}
+
+	migs, err := source.LoadMigrations(os.DirFS(dir), true, source.WithCommittedFS(committed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(migs) != 3 {
+		t.Fatalf("expected 2 committed migrations plus current.sql, got %d", len(migs))
+	}
+
+	err = source.CommitCurrentMigration(dir, "nope", source.WithCommittedFS(committed))
+	if err == nil {
+		t.Fatal("expected an error committing into a filesystem")
+	}
+	if !strings.Contains(err.Error(), "WithCommittedDir") {
+		t.Errorf("error should point at WithCommittedDir, got: %v", err)
+	}
+}
+
 func TestCommitIntoCommittedDir(t *testing.T) {
 	dir := setupCommitted(t, nil)
-	opt := source.WithCommittedDir("committed")
+	opt := source.WithCommittedDir(filepath.Join(dir, "committed"))
 
 	writeSQL(t, dir, "current.sql", "CREATE TABLE a (id INT);")
 	if err := source.CommitCurrentMigration(dir, "first", opt); err != nil {
@@ -697,7 +742,7 @@ func TestCommitContinuesGraphileNumbering(t *testing.T) {
 	dir := setupCommitted(t, map[string]string{
 		"committed/000006-existing.sql": "SELECT 1;",
 	})
-	opt := source.WithCommittedDir("committed")
+	opt := source.WithCommittedDir(filepath.Join(dir, "committed"))
 
 	writeSQL(t, dir, "current.sql", "CREATE TABLE a (id INT);")
 	if err := source.CommitCurrentMigration(dir, "next", opt); err != nil {
@@ -717,7 +762,7 @@ func TestCommitContinuesGraphileNumbering(t *testing.T) {
 func TestInitCreatesCommittedDir(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "migrations")
 
-	if err := source.Init(dir, source.WithCommittedDir("committed")); err != nil {
+	if err := source.Init(dir, source.WithCommittedDir(filepath.Join(dir, "committed"))); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "committed")); err != nil {

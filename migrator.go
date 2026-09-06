@@ -220,10 +220,15 @@ func (m *Migrator) Run(ctx context.Context, migrations []*source.Migration) erro
 // [source.WithCommittedDir].
 type Option = source.Option
 
-// WithCommittedDir places numbered migrations in a subdirectory of the
-// migrations directory instead of alongside current.sql, for projects that
-// keep a Graphile Migrate-style migrations/committed/ layout.
+// WithCommittedDir reads and writes numbered migrations in the given
+// directory instead of alongside current.sql, for projects that keep a
+// Graphile Migrate-style migrations/committed/ layout. The path is a real
+// filesystem path, absolute or relative to the working directory.
 func WithCommittedDir(dir string) Option { return source.WithCommittedDir(dir) }
+
+// WithCommittedFS reads numbered migrations from an arbitrary filesystem
+// rooted at the committed directory, for migrations that are not on disk.
+func WithCommittedFS(fsys fs.FS) Option { return source.WithCommittedFS(fsys) }
 
 // RunMigrations loads and applies all migrations from the given filesystem.
 func RunMigrations(ctx context.Context, db *sql.DB, dialect Dialect, fsys fs.FS, applyCurrent bool, opts ...Option) error {

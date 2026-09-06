@@ -2,7 +2,14 @@
 
 All commands accept `-migrations DIR` (default: `migrations`). Database commands accept `-database-url URL`, defaulting to the `DATABASE_URL` environment variable.
 
-Commands that touch committed migrations also accept `-committed SUBDIR`, which reads and writes numbered migrations in a subdirectory of `-migrations` instead of alongside `current.sql`; it defaults to the `MMMIGRATE_COMMITTED` environment variable. The path is always relative to `-migrations`, never to the working directory, and one pointing outside it (absolute, or with `..`) is rejected. `current.sql` and `@include` paths always resolve from the migrations root. This is mainly for projects keeping a [Graphile Migrate](migrating-from-graphile.md)-style `migrations/committed/` layout.
+Commands that touch committed migrations also accept `-committed DIR`, which reads and writes numbered migrations in `DIR` instead of alongside `current.sql`; it defaults to the `MMMIGRATE_COMMITTED` environment variable. Like `-migrations`, the path is absolute or relative to the working directory, so the committed migrations can live anywhere — under the migrations directory or outside it:
+
+```bash
+mmmigrate apply -committed migrations/committed
+mmmigrate apply -migrations db/migrations -committed db/migrations/committed
+```
+
+`current.sql` and `@include` paths always resolve from `-migrations` regardless, and with `-committed` set, loose `.sql` files there are treated as includable fixtures rather than migrations. This is mainly for projects keeping a [Graphile Migrate](migrating-from-graphile.md)-style `migrations/committed/` layout.
 
 ## Reference
 

@@ -8,7 +8,7 @@ mmmigrate borrows the `current.sql` workflow from [Graphile Migrate](https://git
 |---|---|---|
 | **Language** | Node.js | Go (single binary, no runtime) |
 | **Databases** | PostgreSQL only | PostgreSQL, SQLite, and MySQL via pluggable drivers |
-| **Layout** | `current.sql` + `committed/NNNNNN-name.sql` | Flat by default, or the same `committed/` layout via `-committed` |
+| **Layout** | `current.sql` + `committed/NNNNNN-name.sql` | Flat by default; `-committed DIR` puts committed migrations anywhere |
 | **Integrity** | SHA-1 hash chain (`--! Hash:`) | SHA-256 checksums + merkle chain (`-- Chain:`) |
 | **Includes** | `--! include` from a fixtures folder | `-- @include` from migrations subdirectories, restored on revert |
 | **Shadow DB** | Required, auto-created via root DB connection | Optional (`-shadow-url`), user-managed |
@@ -44,14 +44,14 @@ migrations/
 
 Both tools default to a `migrations/` directory and both keep the development file at `migrations/current.sql`, so nothing has to move. For the committed files you have two options.
 
-**Keep Graphile's layout.** `-committed` names a subdirectory to read numbered migrations from:
+**Keep Graphile's layout.** `-committed` names the directory to read numbered migrations from:
 
 ```bash
-mmmigrate apply -committed committed
-export MMMIGRATE_COMMITTED=committed   # or set it once, for CI and local shells
+mmmigrate apply -committed migrations/committed
+export MMMIGRATE_COMMITTED=migrations/committed   # or set it once, for CI and local shells
 ```
 
-Every command that touches committed migrations accepts the flag (`init`, `apply`, `baseline`, `commit`, `revert`, `status`, `validate`, `watch`). The value is a path relative to `-migrations` — so with `-migrations db/migrations` the example above reads `db/migrations/committed/`. `current.sql` and `@include` paths always resolve from the migrations root regardless, and with `-committed` set, loose `.sql` files at the root are treated as includable fixtures rather than migrations.
+Every command that touches committed migrations accepts the flag (`init`, `apply`, `baseline`, `commit`, `revert`, `status`, `validate`, `watch`). Like `-migrations`, the value is absolute or relative to the working directory — not to `-migrations` — so the committed migrations can sit anywhere. `current.sql` and `@include` paths always resolve from `-migrations` regardless, and with `-committed` set, loose `.sql` files there are treated as includable fixtures rather than migrations.
 
 **Or flatten it:**
 
@@ -137,7 +137,7 @@ mmmigrate apply
 mmmigrate check && mmmigrate validate
 ```
 
-If you kept the `committed/` layout, set `MMMIGRATE_COMMITTED=committed` in the CI environment so every invocation picks it up.
+If you kept the `committed/` layout, set `MMMIGRATE_COMMITTED=migrations/committed` in the CI environment so every invocation picks it up.
 
 ## What you gain
 
