@@ -64,35 +64,12 @@ mmmigrate.RunMigrations(ctx, db, postgres.Dialect{}, sub, false)
 | Function | Purpose |
 |----------|---------|
 | `mmmigrate.RunMigrations(ctx, db, dialect, fsys, applyCurrent)` | Equivalent to the CLI's `apply` command |
-| `mmmigrate.Baseline(ctx, db, dialect, fsys, through)` | Records migrations as applied without executing them |
 | `mmmigrate.Status(ctx, db, dialect, fsys)` | Returns applied/pending state for each migration |
 | `mmmigrate.DryRun(ctx, db, dialect, fsys, applyCurrent)` | Returns the SQL that would run, without executing |
 | `mmmigrate.TestCurrentMigration(ctx, db, fsys)` | Runs `current.sql` in a rolled-back transaction (used by `commit`) |
 | `mmmigrate.VerifyAgainstShadow(ctx, shadowDB, dialect, fsys)` | Resets and replays the chain on a shadow DB |
 
 `fsys` is an `io/fs.FS` rooted at the migrations directory.
-
-`Baseline` takes the highest version to record, or `mmmigrate.AllVersions` for every migration on disk. It is how a database that already has the schema — migrated by another tool, or restored from a snapshot — starts being tracked without replaying its history:
-
-```go
-recorded, err := mmmigrate.Baseline(ctx, db, postgres.Dialect{}, fsys, mmmigrate.AllVersions)
-```
-
-Every function above takes optional trailing `mmmigrate.Option` values, which say where the numbered migrations live when they are not alongside `current.sql`:
-
-```go
-// A real directory: absolute, or relative to the working directory. It need
-// not be under the migrations directory.
-mmmigrate.RunMigrations(ctx, db, postgres.Dialect{}, fsys, false,
-    mmmigrate.WithCommittedDir("migrations/committed"))
-
-// Or any filesystem, for migrations that aren't on disk.
-sub, _ := fs.Sub(embedded, "migrations/committed")
-mmmigrate.RunMigrations(ctx, db, postgres.Dialect{}, fsys, false,
-    mmmigrate.WithCommittedFS(sub))
-```
-
-`current.sql` and `@include` paths always resolve from `fsys`. The `source` functions that operate on a directory path (`Init`, `CommitCurrentMigration`, `RevertLastMigration`, `ValidateChain`) accept `WithCommittedDir` too; they reject `WithCommittedFS`, since they write files.
 
 For lower-level control, construct a `Migrator` directly:
 
@@ -131,7 +108,7 @@ import (
 )
 
 migrations, err := source.LoadMigrations(os.DirFS("migrations"), false)
-// migrations is []*source.Migration with Version, Name, Filename, SQL, IsCurrent.
+// migrations is []*source.Migration with Version, Name, SQL, IsCurrent.
 ```
 
 ## Testing

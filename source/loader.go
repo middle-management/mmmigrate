@@ -1,58 +1,43 @@
 package source
 
 import (
-	"errors"
 	"fmt"
 	"io/fs"
 	"strconv"
 	"strings"
 )
 
-// CurrentFile is the name of the development migration file, always read from
-// the root of the migrations directory.
-const CurrentFile = "current.sql"
-
 // LoadMigrations reads all .sql files from the migrations FS rooted at ".".
-// current.sql is read from that root; numbered migrations come from the
-// location named by WithCommittedDir or WithCommittedFS, and from the same
-// root when neither is set.
-func LoadMigrations(fsys fs.FS, loadCurrent bool, opts ...Option) ([]*Migration, error) {
-	cfg := newConfig(opts)
-
+func LoadMigrations(fsys fs.FS, loadCurrent bool) ([]*Migration, error) {
 	var migrations []*Migration
+	seen := make(map[int]string) // version -> filename, for duplicate detection
 
-	if loadCurrent {
-		content, err := fs.ReadFile(fsys, CurrentFile)
-		switch {
-		case err == nil:
-			migrations = append(migrations, &Migration{
-				Version:   -1,
-				Name:      "current",
-				Filename:  CurrentFile,
-				SQL:       string(content),
-				IsCurrent: true,
-			})
-		case errors.Is(err, fs.ErrNotExist):
-			// Nothing to apply yet — the user may not have created it.
-		default:
-			return nil, fmt.Errorf("failed to read current.sql: %w", err)
-		}
-	}
-
-	committed, err := cfg.fsys(fsys)
-	if err != nil {
-		return nil, err
-	}
-
-	entries, err := fs.ReadDir(committed, ".")
+	entries, err := fs.ReadDir(fsys, ".")
 	if err != nil {
 		return nil, fmt.Errorf("failed to read migrations directory: %w", err)
 	}
 
-	seen := make(map[int]string) // version -> filename, for duplicate detection
-
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") || entry.Name() == CurrentFile {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+
+		if entry.Name() == "current.sql" {
+			if !loadCurrent {
+				continue
+			}
+
+			content, err := fs.ReadFile(fsys, entry.Name())
+			if err != nil {
+				return nil, fmt.Errorf("failed to read current.sql: %w", err)
+			}
+
+			migrations = append(migrations, &Migration{
+				Version:   -1,
+				Name:      "current",
+				SQL:       string(content),
+				IsCurrent: true,
+			})
 			continue
 		}
 
@@ -66,16 +51,15 @@ func LoadMigrations(fsys fs.FS, loadCurrent bool, opts ...Option) ([]*Migration,
 		}
 		seen[version] = entry.Name()
 
-		content, err := fs.ReadFile(committed, entry.Name())
+		content, err := fs.ReadFile(fsys, entry.Name())
 		if err != nil {
 			return nil, fmt.Errorf("failed to read migration file %s: %w", entry.Name(), err)
 		}
 
 		migrations = append(migrations, &Migration{
-			Version:  version,
-			Name:     name,
-			Filename: entry.Name(),
-			SQL:      string(content),
+			Version: version,
+			Name:    name,
+			SQL:     string(content),
 		})
 	}
 
@@ -83,22 +67,19 @@ func LoadMigrations(fsys fs.FS, loadCurrent bool, opts ...Option) ([]*Migration,
 }
 
 // ParseMigrationName extracts version and name from a migration filename.
-// Format: "001_initial_schema.sql" -> version=1, name="initial_schema".
-// A hyphen separates just as well, so Graphile Migrate's committed filenames
-// ("000001-initial-schema.sql" -> version=1, name="initial-schema") parse
-// without renaming.
+// Format: "001_initial_schema.sql" -> version=1, name="initial_schema"
 func ParseMigrationName(filename string) (int, string, error) {
 	name := strings.TrimSuffix(filename, ".sql")
 
-	sep := strings.IndexAny(name, "_-")
-	if sep < 0 {
-		return 0, "", fmt.Errorf("invalid migration filename format: %s (expected: NNN_name.sql or NNN-name.sql)", filename)
+	parts := strings.SplitN(name, "_", 2)
+	if len(parts) != 2 {
+		return 0, "", fmt.Errorf("invalid migration filename format: %s (expected: NNN_name.sql)", filename)
 	}
 
-	version, err := strconv.Atoi(name[:sep])
+	version, err := strconv.Atoi(parts[0])
 	if err != nil {
 		return 0, "", fmt.Errorf("invalid version number in filename %s: %w", filename, err)
 	}
 
-	return version, name[sep+1:], nil
+	return version, parts[1], nil
 }
