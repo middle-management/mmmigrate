@@ -39,6 +39,16 @@ Don't put seed data in migrations. Write a separate seeding script that runs aft
 
 If you really need data that's part of the schema (like enum lookup rows), use `INSERT ... ON CONFLICT DO NOTHING` and accept that it'll only run once per environment.
 
+## How do I start using mmmigrate on a database that already has the schema?
+
+mmmigrate works out what to run purely from its tracking table, which starts empty, so a plain `apply` against a database built by another tool (or restored from a snapshot) fails trying to re-create what is already there. Tell it those migrations are done: run `mmmigrate status` once to create the tracking table, then insert a row per migration the database already has.
+
+```sql
+INSERT INTO mmmigrate.applied (version, name) VALUES (1, 'initial_schema');
+```
+
+`applied_at` defaults, and only `version` is matched against the files. Use `mmmigrate_applied` on SQLite and MySQL. [Migrating from Graphile Migrate](migrating-from-graphile.md#6-record-existing-migrations-as-applied) walks through it with a script to generate the rows.
+
 ## Can I have multiple `current.sql` files?
 
 No. There's exactly one drafting surface per migrations directory. If you want concurrent feature branches with separate schema changes, that's what `git` is for — keep each branch's `current.sql` in its branch and resolve at merge time.

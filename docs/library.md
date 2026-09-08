@@ -108,7 +108,7 @@ import (
 )
 
 migrations, err := source.LoadMigrations(os.DirFS("migrations"), false)
-// migrations is []*source.Migration with Version, Description, Body, Checksum, Chain.
+// migrations is []*source.Migration with Version, Name, SQL, IsCurrent.
 ```
 
 ## Testing
