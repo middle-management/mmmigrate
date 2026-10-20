@@ -87,6 +87,8 @@ See [`.github/workflows/ci.yml`](https://github.com/middle-management/mmmigrate/
 
 Both tables have a `namespace` column (`default` unless you set one), so one database can hold several apps' histories. `applied` has one row per `(namespace, version)`; `current` has one row per namespace.
 
+mmmigrate keeps these tables up to date itself. Changes to them ship as migrations recorded under the reserved namespace `_mmmigrate`, so a database created by an older version is upgraded on the next `apply` (or `status`). Those rows sit alongside yours; filter on your namespace when counting applied migrations.
+
 If you need to inspect what mmmigrate thinks it's applied, query those directly.
 
 ## Can several apps share one database?

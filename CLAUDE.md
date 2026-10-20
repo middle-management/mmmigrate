@@ -32,9 +32,13 @@ cd driver/mysql && MMMIGRATE_TEST_MYSQL_URL=... go test       # mysql integratio
 
 Update golden files with `MMMIGRATE_UPDATE_GOLDEN=1`.
 
+## Changing the tracking tables
+
+Never edit a dialect's `CreateMigrationsTable` or an existing file in `selfmigrations/`. Write the change in `selfmigrations/{postgres,sqlite,mysql}/current.sql` and commit each with `mmmigrate commit -migrations selfmigrations/<flavour> -description "..." -skip-verify`. Existing databases pick it up on their next run.
+
 ## Module structure
 
-- Root module — library: `mmmigrate` package (engine, Dialect interface), `source/` (filesystem ops), `migratetest/` (shared test harness)
+- Root module — library: `mmmigrate` package (engine, Dialect interface), `source/` (filesystem ops), `migratetest/` (shared test harness), `selfmigrations/` (migrations for mmmigrate's own tracking tables, per SQL flavour)
 - `cmd/mmmigrate/` — separate module, CLI binary with build-tag driver selection (all driver deps live here)
 - `driver/postgres/` — separate module, PostgreSQL dialect + pgx driver
 - `driver/sqlite/` — separate module, SQLite dialect + modernc driver

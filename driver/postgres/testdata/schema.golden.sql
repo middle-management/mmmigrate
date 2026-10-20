@@ -4,6 +4,11 @@
   name text NOT NULL
   applied_at timestamp with time zone NOT NULL DEFAULT now()
 
+-- table: mmmigrate.current
+  namespace text NOT NULL
+  checksum text NOT NULL
+  applied_at timestamp with time zone NOT NULL DEFAULT now()
+
 -- table: public.posts
   id integer NOT NULL
   user_id integer NOT NULL

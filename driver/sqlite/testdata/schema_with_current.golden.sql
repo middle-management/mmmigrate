@@ -11,10 +11,10 @@ CREATE TABLE mmmigrate_applied (
 
 -- table: mmmigrate_current
 CREATE TABLE mmmigrate_current (
-			namespace   TEXT PRIMARY KEY,
-			checksum    TEXT NOT NULL,
-			applied_at  TEXT NOT NULL DEFAULT (datetime('now'))
-		);
+	namespace   TEXT PRIMARY KEY,
+	checksum    TEXT NOT NULL,
+	applied_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
 
 -- table: posts
 CREATE TABLE posts (

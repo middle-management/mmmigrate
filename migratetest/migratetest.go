@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/middle-management/mmmigrate"
@@ -74,6 +75,23 @@ func writeSQL(t *testing.T, dir, name, content string) {
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// appliedCount returns how many migrations are recorded as applied in the
+// default namespace.
+func appliedCount(t *testing.T, db *sql.DB, h Harness) int {
+	t.Helper()
+	return namespaceCount(t, db, h, mmmigrate.DefaultNamespace)
+}
+
+func namespaceCount(t *testing.T, db *sql.DB, h Harness, namespace string) int {
+	t.Helper()
+	var n int
+	q := "SELECT count(*) FROM " + h.TrackingTable + " WHERE namespace = '" + namespace + "'"
+	if err := db.QueryRow(q).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
 }
 
 func rowCount(t *testing.T, db *sql.DB, table string) int {
@@ -184,6 +202,7 @@ func Run(t *testing.T, h Harness) {
 	t.Run("Namespaces", func(t *testing.T) { testNamespaces(t, h) })
 	t.Run("ConcurrentApply", func(t *testing.T) { testConcurrentApply(t, h) })
 	t.Run("SingleConnectionPool", func(t *testing.T) { testSingleConnectionPool(t, h) })
+	t.Run("SelfMigrations", func(t *testing.T) { testSelfMigrations(t, h) })
 }
 
 // testSchema runs the fixture migrations (without current.sql) and compares
@@ -200,7 +219,7 @@ func testSchema(t *testing.T, h Harness) {
 		t.Fatal(err)
 	}
 
-	if n := rowCount(t, db, h.TrackingTable); n != 3 {
+	if n := appliedCount(t, db, h); n != 3 {
 		t.Errorf("expected 3 applied migrations, got %d", n)
 	}
 
@@ -240,7 +259,7 @@ func testSkipsApplied(t *testing.T, h Harness) {
 		t.Fatal(err)
 	}
 
-	if n := rowCount(t, db, h.TrackingTable); n != 3 {
+	if n := appliedCount(t, db, h); n != 3 {
 		t.Errorf("expected 3 applied migrations, got %d", n)
 	}
 }
@@ -260,7 +279,7 @@ func testFailedMigration(t *testing.T, h Harness) {
 	}
 
 	// The first 3 valid migrations should still be recorded.
-	if n := rowCount(t, db, h.TrackingTable); n != 3 {
+	if n := appliedCount(t, db, h); n != 3 {
 		t.Errorf("expected 3 applied migrations, got %d", n)
 	}
 }
@@ -457,8 +476,8 @@ func testNamespaces(t *testing.T, h Harness) {
 		t.Fatal(err)
 	}
 
-	if n := rowCount(t, db, h.TrackingTable); n != 2 {
-		t.Errorf("expected 2 applied migrations across namespaces, got %d", n)
+	if a, b := namespaceCount(t, db, h, "app_a"), namespaceCount(t, db, h, "app_b"); a != 1 || b != 1 {
+		t.Errorf("expected 1 applied migration in each namespace, got app_a=%d app_b=%d", a, b)
 	}
 	for _, table := range []string{"ns_a", "ns_a_extra", "ns_b", "ns_b_extra"} {
 		rowCount(t, db, table) // fails the test if the table is missing
@@ -561,7 +580,7 @@ func testConcurrentApply(t *testing.T, h Harness) {
 	close(done)
 	noise.Wait()
 
-	if n := rowCount(t, db, h.TrackingTable); n != 3 {
+	if n := appliedCount(t, db, h); n != 3 {
 		t.Errorf("expected 3 applied migrations, got %d", n)
 	}
 }
@@ -579,7 +598,82 @@ func testSingleConnectionPool(t *testing.T, h Harness) {
 	if err := mmmigrate.RunMigrations(ctx, db, h.Dialect(t), os.DirFS(dir), true); err != nil {
 		t.Fatal(err)
 	}
-	if n := rowCount(t, db, h.TrackingTable); n != 3 {
+	if n := appliedCount(t, db, h); n != 3 {
+		t.Errorf("expected 3 applied migrations, got %d", n)
+	}
+}
+
+// upgradedDialect stands in for a later mmmigrate release that ships extra
+// migrations for its own tracking tables.
+type upgradedDialect struct {
+	mmmigrate.Dialect
+	self fs.FS
+}
+
+func (d upgradedDialect) SelfMigrations() fs.FS { return d.self }
+
+// testSelfMigrations checks that mmmigrate records its own migrations under
+// the reserved namespace and upgrades an existing database when a release
+// adds more.
+func testSelfMigrations(t *testing.T, h Harness) {
+	db := h.OpenDB(t)
+	dir := SetupFixtures(t)
+	os.Remove(filepath.Join(dir, "current.sql"))
+	fsys := os.DirFS(dir)
+
+	ctx := context.Background()
+	d := h.Dialect(t)
+
+	t.Cleanup(func() { db.Exec("DROP TABLE IF EXISTS self_upgrade_probe") })
+
+	self, err := fs.Glob(d.SelfMigrations(), "*.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(self) == 0 {
+		t.Fatal("dialect has no self-migrations")
+	}
+
+	if err := mmmigrate.RunMigrations(ctx, db, d, fsys, false); err != nil {
+		t.Fatal(err)
+	}
+	if n := namespaceCount(t, db, h, mmmigrate.SelfNamespace); n != len(self) {
+		t.Errorf("expected %d self-migrations recorded, got %d", len(self), n)
+	}
+
+	// The reserved namespace can't be used for an app's migrations.
+	reserved := mmmigrate.WithNamespace(mmmigrate.SelfNamespace)
+	if err := mmmigrate.RunMigrations(ctx, db, d, fsys, false, reserved); err == nil {
+		t.Error("RunMigrations accepted the reserved namespace")
+	}
+	if _, err := mmmigrate.Status(ctx, db, d, fsys, reserved); err == nil {
+		t.Error("Status accepted the reserved namespace")
+	}
+	if _, err := mmmigrate.DryRun(ctx, db, d, fsys, false, reserved); err == nil {
+		t.Error("DryRun accepted the reserved namespace")
+	}
+
+	// A later release adds a self-migration: the next run applies it to the
+	// existing database and leaves the app's history alone.
+	upgraded := fstest.MapFS{}
+	for _, name := range self {
+		data, err := fs.ReadFile(d.SelfMigrations(), name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		upgraded[name] = &fstest.MapFile{Data: data}
+	}
+	next := fmt.Sprintf("%03d_probe.sql", len(self)+1)
+	upgraded[next] = &fstest.MapFile{Data: []byte(`CREATE TABLE self_upgrade_probe (id INTEGER PRIMARY KEY);`)}
+
+	if err := mmmigrate.RunMigrations(ctx, db, upgradedDialect{d, upgraded}, fsys, false); err != nil {
+		t.Fatal(err)
+	}
+	rowCount(t, db, "self_upgrade_probe") // fails the test if the table is missing
+	if n := namespaceCount(t, db, h, mmmigrate.SelfNamespace); n != len(self)+1 {
+		t.Errorf("expected %d self-migrations recorded after upgrade, got %d", len(self)+1, n)
+	}
+	if n := appliedCount(t, db, h); n != 3 {
 		t.Errorf("expected 3 applied migrations, got %d", n)
 	}
 }

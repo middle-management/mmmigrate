@@ -59,7 +59,7 @@ async function testPGlite(mm) {
   })
 
   const applied = await db.query(
-    "SELECT version, name FROM mmmigrate.applied ORDER BY version",
+    "SELECT version, name FROM mmmigrate.applied WHERE namespace = 'default' ORDER BY version",
   )
   assert.equal(applied.rows.length, 2)
   assert.equal(applied.rows[0].name, "users")
@@ -80,7 +80,7 @@ async function testPGlite(mm) {
     dialect: "postgres",
     applyCurrent: true,
   })
-  const n = await db.query("SELECT count(*)::int AS n FROM mmmigrate.applied")
+  const n = await db.query("SELECT count(*)::int AS n FROM mmmigrate.applied WHERE namespace = 'default'")
   assert.equal(n.rows[0].n, 2)
 
   console.log("→ render()")
@@ -104,7 +104,7 @@ async function testSQLite(mm) {
   })
 
   const applied = await db.query(
-    "SELECT version, name FROM mmmigrate_applied ORDER BY version",
+    "SELECT version, name FROM mmmigrate_applied WHERE namespace = 'default' ORDER BY version",
   )
   assert.equal(applied.rows.length, 2)
   assert.equal(applied.rows[0].name, "users")
@@ -124,7 +124,7 @@ async function testSQLite(mm) {
     dialect: "sqlite",
     applyCurrent: true,
   })
-  const n = await db.query("SELECT count(*) AS n FROM mmmigrate_applied")
+  const n = await db.query("SELECT count(*) AS n FROM mmmigrate_applied WHERE namespace = 'default'")
   assert.equal(n.rows[0].n, 2)
 
   console.log("✓ sqlite-wasm passed")

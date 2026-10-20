@@ -17,6 +17,10 @@ import (
 // DefaultNamespace is the namespace used when none is given.
 const DefaultNamespace = "default"
 
+// SelfNamespace is the reserved namespace under which mmmigrate records the
+// migrations of its own tracking tables (see package selfmigrations).
+const SelfNamespace = "_mmmigrate"
+
 // Migrator handles database migrations.
 type Migrator struct {
 	db           *sql.DB
@@ -54,32 +58,46 @@ func NewMigrator(db *sql.DB, dialect Dialect, fsys fs.FS, applyCurrent bool, opt
 	return m
 }
 
-// querier is satisfied by both *sql.DB and *sql.Conn.
-type querier interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-	BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
-}
-
-func (m *Migrator) ensureMigrationsTable(ctx context.Context, q querier) error {
-	if _, err := q.ExecContext(ctx, m.dialect.CreateMigrationsTable()); err != nil {
-		return fmt.Errorf("failed to create migrations table: %w", err)
+func (m *Migrator) checkNamespace() error {
+	if m.namespace == SelfNamespace {
+		return fmt.Errorf("namespace %q is reserved for mmmigrate's own tracking tables", SelfNamespace)
 	}
-
-	if m.applyCurrent {
-		if _, err := q.ExecContext(ctx, m.dialect.CreateCurrentTable()); err != nil {
-			return fmt.Errorf("failed to create current migrations table: %w", err)
-		}
-	}
-
 	return nil
 }
 
-func (m *Migrator) getAppliedMigrations(ctx context.Context, q querier) (map[int]*source.Migration, error) {
+// prepareTrackingTables creates the applied table if needed and brings
+// mmmigrate's own tracking tables up to date. It holds the SelfNamespace lock
+// so runs in different namespaces don't race to apply the same change.
+func (m *Migrator) prepareTrackingTables(ctx context.Context, conn *sql.Conn) error {
+	self := &Migrator{
+		db:        m.db,
+		dialect:   m.dialect,
+		fsys:      m.dialect.SelfMigrations(),
+		namespace: SelfNamespace,
+	}
+	if err := self.acquireLock(ctx, conn); err != nil {
+		return err
+	}
+	defer self.releaseLock(ctx, conn)
+
+	if _, err := conn.ExecContext(ctx, m.dialect.CreateMigrationsTable()); err != nil {
+		return fmt.Errorf("failed to create migrations table: %w", err)
+	}
+
+	migrations, err := source.LoadMigrations(self.fsys, false)
+	if err != nil {
+		return fmt.Errorf("failed to load mmmigrate's own migrations: %w", err)
+	}
+	if err := self.applyNumbered(ctx, conn, migrations); err != nil {
+		return fmt.Errorf("failed to upgrade mmmigrate's tracking tables: %w", err)
+	}
+	return nil
+}
+
+func (m *Migrator) getAppliedMigrations(ctx context.Context, conn *sql.Conn) (map[int]*source.Migration, error) {
 	applied := make(map[int]*source.Migration)
 
-	rows, err := q.QueryContext(ctx, m.dialect.SelectApplied(), m.namespace)
+	rows, err := conn.QueryContext(ctx, m.dialect.SelectApplied(), m.namespace)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get applied migrations: %w", err)
 	}
@@ -97,9 +115,9 @@ func (m *Migrator) getAppliedMigrations(ctx context.Context, q querier) (map[int
 	return applied, rows.Err()
 }
 
-func (m *Migrator) getCurrentChecksum(ctx context.Context, q querier) (string, error) {
+func (m *Migrator) getCurrentChecksum(ctx context.Context, conn *sql.Conn) (string, error) {
 	var checksum string
-	err := q.QueryRowContext(ctx, m.dialect.SelectCurrentChecksum(), m.namespace).Scan(&checksum)
+	err := conn.QueryRowContext(ctx, m.dialect.SelectCurrentChecksum(), m.namespace).Scan(&checksum)
 	if err == sql.ErrNoRows {
 		return "", nil
 	}
@@ -109,7 +127,7 @@ func (m *Migrator) getCurrentChecksum(ctx context.Context, q querier) (string, e
 	return checksum, nil
 }
 
-func (m *Migrator) runCurrentMigration(ctx context.Context, q querier, mig *source.Migration) error {
+func (m *Migrator) runCurrentMigration(ctx context.Context, conn *sql.Conn, mig *source.Migration) error {
 	if strings.TrimSpace(mig.SQL) == "" {
 		return nil
 	}
@@ -121,7 +139,7 @@ func (m *Migrator) runCurrentMigration(ctx context.Context, q querier, mig *sour
 
 	checksum := fmt.Sprintf("%x", sha256.Sum256([]byte(processedSQL)))
 
-	currentChecksum, err := m.getCurrentChecksum(ctx, q)
+	currentChecksum, err := m.getCurrentChecksum(ctx, conn)
 	if err != nil {
 		return fmt.Errorf("failed to get current checksum: %w", err)
 	}
@@ -131,7 +149,7 @@ func (m *Migrator) runCurrentMigration(ctx context.Context, q querier, mig *sour
 		return nil
 	}
 
-	tx, err := q.BeginTx(ctx, nil)
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to start transaction for current.sql: %w", err)
 	}
@@ -153,8 +171,8 @@ func (m *Migrator) runCurrentMigration(ctx context.Context, q querier, mig *sour
 	return nil
 }
 
-func (m *Migrator) runMigration(ctx context.Context, q querier, mig *source.Migration) error {
-	tx, err := q.BeginTx(ctx, nil)
+func (m *Migrator) runMigration(ctx context.Context, conn *sql.Conn, mig *source.Migration) error {
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to start transaction: %w", err)
 	}
@@ -172,7 +190,7 @@ func (m *Migrator) runMigration(ctx context.Context, q querier, mig *source.Migr
 		return fmt.Errorf("failed to commit migration %d: %w", mig.Version, err)
 	}
 
-	slog.Info("applied migration", "version", mig.Version, "name", mig.Name)
+	slog.Info("applied migration", "namespace", m.namespace, "version", mig.Version, "name", mig.Name)
 	return nil
 }
 
@@ -208,13 +226,53 @@ func (m *Migrator) releaseLock(ctx context.Context, conn *sql.Conn) {
 	conn.Raw(func(any) error { return driver.ErrBadConn })
 }
 
-// Run applies all pending migrations.
-func (m *Migrator) Run(ctx context.Context, migrations []*source.Migration) error {
-	// The lock is session-scoped, so take it, run the migrations and release
-	// it on one connection rather than whichever ones the pool hands out.
+// conn returns a dedicated connection with the tracking tables ready. The
+// migration locks are session-scoped, so everything that takes one runs on
+// this connection rather than whichever ones the pool hands out.
+func (m *Migrator) conn(ctx context.Context) (*sql.Conn, error) {
+	if err := m.checkNamespace(); err != nil {
+		return nil, err
+	}
 	conn, err := m.db.Conn(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to get database connection: %w", err)
+		return nil, fmt.Errorf("failed to get database connection: %w", err)
+	}
+	if err := m.prepareTrackingTables(ctx, conn); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	return conn, nil
+}
+
+// applyNumbered runs the numbered migrations that aren't recorded as applied,
+// in version order.
+func (m *Migrator) applyNumbered(ctx context.Context, conn *sql.Conn, numbered []*source.Migration) error {
+	applied, err := m.getAppliedMigrations(ctx, conn)
+	if err != nil {
+		return err
+	}
+
+	sort.Slice(numbered, func(i, j int) bool {
+		return numbered[i].Version < numbered[j].Version
+	})
+
+	for _, mig := range numbered {
+		if _, ok := applied[mig.Version]; ok {
+			slog.Debug("migration already applied", "namespace", m.namespace, "version", mig.Version, "name", mig.Name)
+			continue
+		}
+		if err := m.runMigration(ctx, conn, mig); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Run applies all pending migrations.
+func (m *Migrator) Run(ctx context.Context, migrations []*source.Migration) error {
+	conn, err := m.conn(ctx)
+	if err != nil {
+		return err
 	}
 	defer conn.Close()
 
@@ -222,15 +280,6 @@ func (m *Migrator) Run(ctx context.Context, migrations []*source.Migration) erro
 		return err
 	}
 	defer m.releaseLock(ctx, conn)
-
-	if err := m.ensureMigrationsTable(ctx, conn); err != nil {
-		return err
-	}
-
-	applied, err := m.getAppliedMigrations(ctx, conn)
-	if err != nil {
-		return err
-	}
 
 	var numbered, current []*source.Migration
 	for _, mig := range migrations {
@@ -241,18 +290,8 @@ func (m *Migrator) Run(ctx context.Context, migrations []*source.Migration) erro
 		}
 	}
 
-	sort.Slice(numbered, func(i, j int) bool {
-		return numbered[i].Version < numbered[j].Version
-	})
-
-	for _, mig := range numbered {
-		if _, ok := applied[mig.Version]; ok {
-			slog.Debug("migration already applied", "version", mig.Version, "name", mig.Name)
-			continue
-		}
-		if err := m.runMigration(ctx, conn, mig); err != nil {
-			return err
-		}
+	if err := m.applyNumbered(ctx, conn, numbered); err != nil {
+		return err
 	}
 
 	if m.applyCurrent {
@@ -291,11 +330,13 @@ type MigrationStatus struct {
 func Status(ctx context.Context, db *sql.DB, dialect Dialect, fsys fs.FS, opts ...Option) ([]MigrationStatus, error) {
 	migrator := NewMigrator(db, dialect, fsys, false, opts...)
 
-	if err := migrator.ensureMigrationsTable(ctx, db); err != nil {
+	conn, err := migrator.conn(ctx)
+	if err != nil {
 		return nil, err
 	}
+	defer conn.Close()
 
-	applied, err := migrator.getAppliedMigrations(ctx, db)
+	applied, err := migrator.getAppliedMigrations(ctx, conn)
 	if err != nil {
 		return nil, err
 	}
@@ -326,11 +367,13 @@ func Status(ctx context.Context, db *sql.DB, dialect Dialect, fsys fs.FS, opts .
 func DryRun(ctx context.Context, db *sql.DB, dialect Dialect, fsys fs.FS, applyCurrent bool, opts ...Option) ([]string, error) {
 	migrator := NewMigrator(db, dialect, fsys, applyCurrent, opts...)
 
-	if err := migrator.ensureMigrationsTable(ctx, db); err != nil {
+	conn, err := migrator.conn(ctx)
+	if err != nil {
 		return nil, err
 	}
+	defer conn.Close()
 
-	applied, err := migrator.getAppliedMigrations(ctx, db)
+	applied, err := migrator.getAppliedMigrations(ctx, conn)
 	if err != nil {
 		return nil, err
 	}
@@ -351,7 +394,7 @@ func DryRun(ctx context.Context, db *sql.DB, dialect Dialect, fsys fs.FS, applyC
 					return nil, err
 				}
 				checksum := fmt.Sprintf("%x", sha256.Sum256([]byte(processedSQL)))
-				currentChecksum, _ := migrator.getCurrentChecksum(ctx, db)
+				currentChecksum, _ := migrator.getCurrentChecksum(ctx, conn)
 				if checksum != currentChecksum {
 					pending = append(pending, "current.sql")
 				}
