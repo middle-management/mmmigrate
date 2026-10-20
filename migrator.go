@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -32,13 +33,21 @@ func NewMigrator(db *sql.DB, dialect Dialect, fsys fs.FS, applyCurrent bool) *Mi
 	}
 }
 
-func (m *Migrator) ensureMigrationsTable(ctx context.Context) error {
-	if _, err := m.db.ExecContext(ctx, m.dialect.CreateMigrationsTable()); err != nil {
+// querier is satisfied by both *sql.DB and *sql.Conn.
+type querier interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+	BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
+}
+
+func (m *Migrator) ensureMigrationsTable(ctx context.Context, q querier) error {
+	if _, err := q.ExecContext(ctx, m.dialect.CreateMigrationsTable()); err != nil {
 		return fmt.Errorf("failed to create migrations table: %w", err)
 	}
 
 	if m.applyCurrent {
-		if _, err := m.db.ExecContext(ctx, m.dialect.CreateCurrentTable()); err != nil {
+		if _, err := q.ExecContext(ctx, m.dialect.CreateCurrentTable()); err != nil {
 			return fmt.Errorf("failed to create current migrations table: %w", err)
 		}
 	}
@@ -46,10 +55,10 @@ func (m *Migrator) ensureMigrationsTable(ctx context.Context) error {
 	return nil
 }
 
-func (m *Migrator) getAppliedMigrations(ctx context.Context) (map[int]*source.Migration, error) {
+func (m *Migrator) getAppliedMigrations(ctx context.Context, q querier) (map[int]*source.Migration, error) {
 	applied := make(map[int]*source.Migration)
 
-	rows, err := m.db.QueryContext(ctx, m.dialect.SelectApplied())
+	rows, err := q.QueryContext(ctx, m.dialect.SelectApplied())
 	if err != nil {
 		return nil, fmt.Errorf("failed to get applied migrations: %w", err)
 	}
@@ -67,9 +76,9 @@ func (m *Migrator) getAppliedMigrations(ctx context.Context) (map[int]*source.Mi
 	return applied, rows.Err()
 }
 
-func (m *Migrator) getCurrentChecksum(ctx context.Context) (string, error) {
+func (m *Migrator) getCurrentChecksum(ctx context.Context, q querier) (string, error) {
 	var checksum string
-	err := m.db.QueryRowContext(ctx, m.dialect.SelectCurrentChecksum()).Scan(&checksum)
+	err := q.QueryRowContext(ctx, m.dialect.SelectCurrentChecksum()).Scan(&checksum)
 	if err == sql.ErrNoRows {
 		return "", nil
 	}
@@ -79,7 +88,7 @@ func (m *Migrator) getCurrentChecksum(ctx context.Context) (string, error) {
 	return checksum, nil
 }
 
-func (m *Migrator) runCurrentMigration(ctx context.Context, mig *source.Migration) error {
+func (m *Migrator) runCurrentMigration(ctx context.Context, q querier, mig *source.Migration) error {
 	if strings.TrimSpace(mig.SQL) == "" {
 		return nil
 	}
@@ -91,7 +100,7 @@ func (m *Migrator) runCurrentMigration(ctx context.Context, mig *source.Migratio
 
 	checksum := fmt.Sprintf("%x", sha256.Sum256([]byte(processedSQL)))
 
-	currentChecksum, err := m.getCurrentChecksum(ctx)
+	currentChecksum, err := m.getCurrentChecksum(ctx, q)
 	if err != nil {
 		return fmt.Errorf("failed to get current checksum: %w", err)
 	}
@@ -101,7 +110,7 @@ func (m *Migrator) runCurrentMigration(ctx context.Context, mig *source.Migratio
 		return nil
 	}
 
-	tx, err := m.db.BeginTx(ctx, nil)
+	tx, err := q.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to start transaction for current.sql: %w", err)
 	}
@@ -123,8 +132,8 @@ func (m *Migrator) runCurrentMigration(ctx context.Context, mig *source.Migratio
 	return nil
 }
 
-func (m *Migrator) runMigration(ctx context.Context, mig *source.Migration) error {
-	tx, err := m.db.BeginTx(ctx, nil)
+func (m *Migrator) runMigration(ctx context.Context, q querier, mig *source.Migration) error {
+	tx, err := q.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to start transaction: %w", err)
 	}
@@ -146,35 +155,58 @@ func (m *Migrator) runMigration(ctx context.Context, mig *source.Migration) erro
 	return nil
 }
 
-func (m *Migrator) acquireLock(ctx context.Context) error {
+// acquireLock takes the dialect's session-scoped lock on conn. The caller must
+// release it on the same conn.
+func (m *Migrator) acquireLock(ctx context.Context, conn *sql.Conn) error {
 	if q := m.dialect.Lock(); q != "" {
 		slog.Debug("acquiring migration lock")
-		if _, err := m.db.ExecContext(ctx, q); err != nil {
+		if _, err := conn.ExecContext(ctx, q); err != nil {
 			return fmt.Errorf("failed to acquire migration lock: %w", err)
 		}
 	}
 	return nil
 }
 
-func (m *Migrator) releaseLock(ctx context.Context) {
-	if q := m.dialect.Unlock(); q != "" {
-		slog.Debug("releasing migration lock")
-		m.db.ExecContext(ctx, q)
+func (m *Migrator) releaseLock(ctx context.Context, conn *sql.Conn) {
+	q := m.dialect.Unlock()
+	if q == "" {
+		return
 	}
+	slog.Debug("releasing migration lock")
+
+	// Release even if ctx was cancelled mid-run.
+	var released sql.NullBool
+	err := conn.QueryRowContext(context.WithoutCancel(ctx), q).Scan(&released)
+	if err == nil && released.Valid && released.Bool {
+		return
+	}
+
+	// The lock may still be held by this session. Discard the connection
+	// rather than return it to the pool, so closing it releases the lock.
+	slog.Warn("failed to release migration lock, discarding connection", "error", err)
+	conn.Raw(func(any) error { return driver.ErrBadConn })
 }
 
 // Run applies all pending migrations.
 func (m *Migrator) Run(ctx context.Context, migrations []*source.Migration) error {
-	if err := m.acquireLock(ctx); err != nil {
+	// The lock is session-scoped, so take it, run the migrations and release
+	// it on one connection rather than whichever ones the pool hands out.
+	conn, err := m.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get database connection: %w", err)
+	}
+	defer conn.Close()
+
+	if err := m.acquireLock(ctx, conn); err != nil {
 		return err
 	}
-	defer m.releaseLock(ctx)
+	defer m.releaseLock(ctx, conn)
 
-	if err := m.ensureMigrationsTable(ctx); err != nil {
+	if err := m.ensureMigrationsTable(ctx, conn); err != nil {
 		return err
 	}
 
-	applied, err := m.getAppliedMigrations(ctx)
+	applied, err := m.getAppliedMigrations(ctx, conn)
 	if err != nil {
 		return err
 	}
@@ -197,14 +229,14 @@ func (m *Migrator) Run(ctx context.Context, migrations []*source.Migration) erro
 			slog.Debug("migration already applied", "version", mig.Version, "name", mig.Name)
 			continue
 		}
-		if err := m.runMigration(ctx, mig); err != nil {
+		if err := m.runMigration(ctx, conn, mig); err != nil {
 			return err
 		}
 	}
 
 	if m.applyCurrent {
 		for _, mig := range current {
-			if err := m.runCurrentMigration(ctx, mig); err != nil {
+			if err := m.runCurrentMigration(ctx, conn, mig); err != nil {
 				return err
 			}
 		}
@@ -238,11 +270,11 @@ type MigrationStatus struct {
 func Status(ctx context.Context, db *sql.DB, dialect Dialect, fsys fs.FS) ([]MigrationStatus, error) {
 	migrator := NewMigrator(db, dialect, fsys, false)
 
-	if err := migrator.ensureMigrationsTable(ctx); err != nil {
+	if err := migrator.ensureMigrationsTable(ctx, db); err != nil {
 		return nil, err
 	}
 
-	applied, err := migrator.getAppliedMigrations(ctx)
+	applied, err := migrator.getAppliedMigrations(ctx, db)
 	if err != nil {
 		return nil, err
 	}
@@ -273,11 +305,11 @@ func Status(ctx context.Context, db *sql.DB, dialect Dialect, fsys fs.FS) ([]Mig
 func DryRun(ctx context.Context, db *sql.DB, dialect Dialect, fsys fs.FS, applyCurrent bool) ([]string, error) {
 	migrator := NewMigrator(db, dialect, fsys, applyCurrent)
 
-	if err := migrator.ensureMigrationsTable(ctx); err != nil {
+	if err := migrator.ensureMigrationsTable(ctx, db); err != nil {
 		return nil, err
 	}
 
-	applied, err := migrator.getAppliedMigrations(ctx)
+	applied, err := migrator.getAppliedMigrations(ctx, db)
 	if err != nil {
 		return nil, err
 	}
@@ -298,7 +330,7 @@ func DryRun(ctx context.Context, db *sql.DB, dialect Dialect, fsys fs.FS, applyC
 					return nil, err
 				}
 				checksum := fmt.Sprintf("%x", sha256.Sum256([]byte(processedSQL)))
-				currentChecksum, _ := migrator.getCurrentChecksum(ctx)
+				currentChecksum, _ := migrator.getCurrentChecksum(ctx, db)
 				if checksum != currentChecksum {
 					pending = append(pending, "current.sql")
 				}

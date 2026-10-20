@@ -10,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/middle-management/mmmigrate"
 )
@@ -179,6 +181,8 @@ func Run(t *testing.T, h Harness) {
 	t.Run("ShadowVerification", func(t *testing.T) { testShadow(t, h) })
 	t.Run("Status", func(t *testing.T) { testStatus(t, h) })
 	t.Run("DryRun", func(t *testing.T) { testDryRun(t, h) })
+	t.Run("ConcurrentApply", func(t *testing.T) { testConcurrentApply(t, h) })
+	t.Run("SingleConnectionPool", func(t *testing.T) { testSingleConnectionPool(t, h) })
 }
 
 // testSchema runs the fixture migrations (without current.sql) and compares
@@ -415,6 +419,91 @@ func testDryRun(t *testing.T, h Harness) {
 		t.Fatal(err)
 	}
 	assertStrings(t, "after editing current.sql", pending, []string{"current.sql"})
+}
+
+// testConcurrentApply runs several applies at once through a connection pool
+// that is also serving other queries, as in an app that migrates on startup.
+// The migration lock is session-scoped, so if it were released on a different
+// pooled connection than the one that took it, it would stay held and later
+// applies would block until the timeout.
+func testConcurrentApply(t *testing.T, h Harness) {
+	d := h.Dialect(t)
+	if d.Lock() == "" {
+		t.Skip("dialect has no migration lock")
+	}
+
+	db := h.OpenDB(t)
+	db.SetMaxIdleConns(16)
+	dir := SetupFixtures(t)
+	os.Remove(filepath.Join(dir, "current.sql"))
+	fsys := os.DirFS(dir)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Background traffic keeps borrowing and returning pooled connections.
+	done := make(chan struct{})
+	var noise sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		noise.Add(1)
+		go func() {
+			defer noise.Done()
+			for {
+				select {
+				case <-done:
+					return
+				default:
+					db.ExecContext(ctx, "SELECT 1")
+				}
+			}
+		}()
+	}
+
+	const runs = 8
+	errs := make(chan error, runs)
+	for i := 0; i < runs; i++ {
+		go func() { errs <- mmmigrate.RunMigrations(ctx, db, d, fsys, false) }()
+	}
+	for i := 0; i < runs; i++ {
+		if err := <-errs; err != nil {
+			close(done)
+			noise.Wait()
+			t.Fatal(err)
+		}
+	}
+
+	// A further run must not find the lock still held by an idle connection.
+	for i := 0; i < runs; i++ {
+		if err := mmmigrate.RunMigrations(ctx, db, d, fsys, false); err != nil {
+			close(done)
+			noise.Wait()
+			t.Fatal(err)
+		}
+	}
+	close(done)
+	noise.Wait()
+
+	if n := rowCount(t, db, h.TrackingTable); n != 3 {
+		t.Errorf("expected 3 applied migrations, got %d", n)
+	}
+}
+
+// testSingleConnectionPool checks that the lock and the migrations share a
+// connection, so a pool limited to one connection doesn't deadlock.
+func testSingleConnectionPool(t *testing.T, h Harness) {
+	db := h.OpenDB(t)
+	db.SetMaxOpenConns(1)
+	dir := SetupFixtures(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := mmmigrate.RunMigrations(ctx, db, h.Dialect(t), os.DirFS(dir), true); err != nil {
+		t.Fatal(err)
+	}
+	if n := rowCount(t, db, h.TrackingTable); n != 3 {
+		t.Errorf("expected 3 applied migrations, got %d", n)
+	}
 }
 
 func assertStrings(t *testing.T, label string, got, want []string) {
