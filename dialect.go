@@ -1,6 +1,10 @@
 package mmmigrate
 
-import "io/fs"
+import (
+	"context"
+	"database/sql"
+	"io/fs"
+)
 
 // Dialect abstracts database-specific SQL syntax.
 //
@@ -34,4 +38,13 @@ type Dialect interface {
 	// ResetSQL returns SQL that drops all user objects so the database can be
 	// replayed from scratch. Used by shadow database verification.
 	ResetSQL() string
+}
+
+// Resetter is implemented by dialects whose reset can't be written as a single
+// SQL script, for example because some objects can't be dropped from dynamic
+// SQL. Shadow verification calls Reset in place of executing ResetSQL.
+type Resetter interface {
+	// Reset drops all user objects through conn so the database can be
+	// replayed from scratch.
+	Reset(ctx context.Context, conn *sql.Conn) error
 }

@@ -1,7 +1,11 @@
 package mysql
 
 import (
+	"context"
+	"database/sql"
+	"fmt"
 	"io/fs"
+	"strings"
 
 	"github.com/middle-management/mmmigrate"
 	"github.com/middle-management/mmmigrate/selfmigrations"
@@ -64,18 +68,51 @@ func (Dialect) Unlock() string {
 	return "SELECT RELEASE_LOCK(CONCAT('mmmigrate:', LEFT(SHA2(?, 256), 40)))"
 }
 
-func (Dialect) ResetSQL() string {
-	return `
-		SET FOREIGN_KEY_CHECKS = 0;
-		SET @tables = NULL;
-		SELECT GROUP_CONCAT(table_name) INTO @tables
-			FROM information_schema.tables
-			WHERE table_schema = DATABASE();
-		SET @stmt = IF(@tables IS NOT NULL,
-			CONCAT('DROP TABLE IF EXISTS ', @tables),
-			'SELECT 1');
-		PREPARE drop_stmt FROM @stmt;
-		EXECUTE drop_stmt;
-		DEALLOCATE PREPARE drop_stmt;
-		SET FOREIGN_KEY_CHECKS = 1`
+// ResetSQL is unused: MySQL can't drop stored routines or events from dynamic
+// SQL, so shadow verification calls Reset instead.
+func (Dialect) ResetSQL() string { return "" }
+
+var _ mmmigrate.Resetter = Dialect{}
+
+// Reset drops every view, table, stored procedure, stored function and event
+// in the current database. Triggers go with their tables.
+func (Dialect) Reset(ctx context.Context, conn *sql.Conn) error {
+	rows, err := conn.QueryContext(ctx, `
+		SELECT IF(table_type = 'VIEW', 'VIEW', 'TABLE') AS kind, table_name AS name
+			FROM information_schema.tables WHERE table_schema = DATABASE()
+		UNION ALL
+		SELECT routine_type, routine_name
+			FROM information_schema.routines WHERE routine_schema = DATABASE()
+		UNION ALL
+		SELECT 'EVENT', event_name
+			FROM information_schema.events WHERE event_schema = DATABASE()
+		ORDER BY FIELD(kind, 'VIEW', 'TABLE', 'PROCEDURE', 'FUNCTION', 'EVENT')`)
+	if err != nil {
+		return fmt.Errorf("list objects: %w", err)
+	}
+	var drops []string
+	for rows.Next() {
+		var kind, name string
+		if err := rows.Scan(&kind, &name); err != nil {
+			rows.Close()
+			return err
+		}
+		drops = append(drops, "DROP "+kind+" IF EXISTS `"+strings.ReplaceAll(name, "`", "``")+"`")
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	if _, err := conn.ExecContext(ctx, "SET FOREIGN_KEY_CHECKS = 0"); err != nil {
+		return err
+	}
+	defer conn.ExecContext(context.WithoutCancel(ctx), "SET FOREIGN_KEY_CHECKS = 1")
+
+	for _, q := range drops {
+		if _, err := conn.ExecContext(ctx, q); err != nil {
+			return fmt.Errorf("%s: %w", q, err)
+		}
+	}
+	return nil
 }

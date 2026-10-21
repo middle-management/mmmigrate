@@ -424,7 +424,7 @@ func DryRun(ctx context.Context, db *sql.DB, dialect Dialect, fsys fs.FS, applyC
 // current.sql from scratch, verifying the full chain works on a clean database.
 func VerifyAgainstShadow(ctx context.Context, shadowDB *sql.DB, dialect Dialect, fsys fs.FS, opts ...Option) error {
 	slog.Info("resetting shadow database")
-	if _, err := shadowDB.ExecContext(ctx, dialect.ResetSQL()); err != nil {
+	if err := resetShadow(ctx, shadowDB, dialect); err != nil {
 		return fmt.Errorf("failed to reset shadow database: %w", err)
 	}
 
@@ -434,6 +434,22 @@ func VerifyAgainstShadow(ctx context.Context, shadowDB *sql.DB, dialect Dialect,
 	}
 
 	return nil
+}
+
+// resetShadow drops everything in the shadow database on one connection, so
+// session settings made during the reset apply to all of it.
+func resetShadow(ctx context.Context, shadowDB *sql.DB, dialect Dialect) error {
+	conn, err := shadowDB.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	if r, ok := dialect.(Resetter); ok {
+		return r.Reset(ctx, conn)
+	}
+	_, err = conn.ExecContext(ctx, dialect.ResetSQL())
+	return err
 }
 
 // TestCurrentMigration applies current.sql in a transaction and rolls it back,
