@@ -45,7 +45,7 @@ edit current.sql → apply -current (dev, iterate) → commit → apply (prod)
 | `watch [-debounce DURATION]` | yes | Watch current.sql + includes and re-apply on change (dev loop) |
 | `version` | no | Print version |
 
-*`commit` skips the DB test when `-skip-verify` is set. `-shadow-url` (or `SHADOW_DATABASE_URL`) additionally replays the full chain on a disposable database — required for MySQL DDL.
+*`commit` skips the DB test when `-skip-verify` is set. `-shadow-url` (or `SHADOW_DATABASE_URL`) additionally replays the full chain on a disposable database — required for MySQL DDL. The shadow reset empties the whole database; if migrations depend on objects they don't create (another app's schema), pass them with `-shadow-baseline FILE` (repeatable, or `MMMIGRATE_SHADOW_BASELINE`), loaded after the reset and before the replay.
 
 All commands accept `-migrations DIR` (default: `migrations`). DB commands accept `-database-url URL` (default: `DATABASE_URL` env). `apply`, `status`, `commit` and `watch` also accept `-namespace NAME` (default: `MMMIGRATE_NAMESPACE` env, then `default`) for several apps sharing one database.
 

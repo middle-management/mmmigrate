@@ -102,7 +102,7 @@ mmmigrate doesn't support `:PLACEHOLDER` substitution. If your migrations use pl
 mmmigrate has no `beforeReset`/`afterReset`/`beforeAll`/`afterAll` equivalents. Most uses fall into a few patterns:
 
 - **Seed data** — write a separate script that runs after `mmmigrate apply`. Don't put seed data in migrations.
-- **Reset hooks** — call your own scripts before/after pointing mmmigrate at a shadow database.
+- **Reset hooks** — the shadow reset empties the whole database, so anything you load beforehand is gone by the replay. If your migrations depend on objects they don't create (another app's schema, say), pass them with [`-shadow-baseline`](shadow-database.md#objects-owned-by-another-app), which loads after the reset and before the replay.
 - **Permission/role setup** — include the `GRANT`/`REVOKE` SQL directly in a migration.
 
 ### 6. Record existing migrations as applied

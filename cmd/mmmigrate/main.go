@@ -125,6 +125,11 @@ func cmdCommit(args []string) {
 	migrationsDir := fs.String("migrations", "migrations", "Path to migrations directory")
 	description := fs.String("description", "", "Description for the committed migration (required)")
 	skipVerify := fs.Bool("skip-verify", false, "Skip migration verification (commit without testing against a database)")
+	var baselinePaths []string
+	fs.Func("shadow-baseline", "SQL file to load into the shadow database before replaying, e.g. another app's schema; repeatable (defaults to MMMIGRATE_SHADOW_BASELINE env var, paths separated like PATH)", func(p string) error {
+		baselinePaths = append(baselinePaths, p)
+		return nil
+	})
 	namespace := namespaceFlag(fs)
 	fs.Parse(args)
 
@@ -148,9 +153,47 @@ func cmdCommit(args []string) {
 		shadow = os.Getenv("SHADOW_DATABASE_URL")
 	}
 
-	if err := commit(context.Background(), db, shadow, absDir, *description, *skipVerify, namespace()); err != nil {
+	opts := []mmmigrate.Option{namespace()}
+	if !*skipVerify {
+		baselines, err := shadowBaselines(baselinePaths, shadow)
+		if err != nil {
+			fatal("%v", err)
+		}
+		opts = append(opts, baselines...)
+	}
+
+	if err := commit(context.Background(), db, shadow, absDir, *description, *skipVerify, opts...); err != nil {
 		fatal("%v", err)
 	}
+}
+
+// shadowBaselines reads the baseline files for shadow verification: the
+// -shadow-baseline flags, or else MMMIGRATE_SHADOW_BASELINE (paths separated
+// like PATH). An explicit flag without a shadow URL is an error; the env var
+// is ignored then, so an app can set it once for every command.
+func shadowBaselines(flagPaths []string, shadowURL string) ([]mmmigrate.Option, error) {
+	paths := flagPaths
+	if len(paths) == 0 {
+		if shadowURL == "" {
+			return nil, nil
+		}
+		paths = filepath.SplitList(os.Getenv("MMMIGRATE_SHADOW_BASELINE"))
+	} else if shadowURL == "" {
+		return nil, fmt.Errorf("-shadow-baseline requires -shadow-url (or SHADOW_DATABASE_URL)")
+	}
+
+	var opts []mmmigrate.Option
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read shadow baseline: %w", err)
+		}
+		opts = append(opts, mmmigrate.WithShadowBaseline(string(b)))
+	}
+	return opts, nil
 }
 
 // commit verifies current.sql and then writes it out as the next numbered

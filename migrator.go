@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -28,6 +29,7 @@ type Migrator struct {
 	fsys         fs.FS
 	applyCurrent bool
 	namespace    string
+	baselines    []string
 }
 
 // Option configures a Migrator.
@@ -38,6 +40,15 @@ type Option func(*Migrator)
 // DefaultNamespace.
 func WithNamespace(ns string) Option {
 	return func(m *Migrator) { m.namespace = ns }
+}
+
+// WithShadowBaseline adds SQL that shadow verification runs after resetting
+// the shadow database and before replaying the migrations. It stands in for
+// objects the deployed database already has that these migrations don't
+// create, such as another app's schema. Baselines run in the order given and
+// are not recorded as applied. Other operations ignore this option.
+func WithShadowBaseline(sql string) Option {
+	return func(m *Migrator) { m.baselines = append(m.baselines, sql) }
 }
 
 // NewMigrator creates a new migrator instance. fsys is the filesystem rooted at
@@ -428,6 +439,13 @@ func VerifyAgainstShadow(ctx context.Context, shadowDB *sql.DB, dialect Dialect,
 		return fmt.Errorf("failed to reset shadow database: %w", err)
 	}
 
+	if baselines := NewMigrator(shadowDB, dialect, fsys, true, opts...).baselines; len(baselines) > 0 {
+		slog.Info("loading shadow baseline", "files", len(baselines))
+		if err := loadBaselines(ctx, shadowDB, baselines); err != nil {
+			return fmt.Errorf("failed to load shadow baseline: %w", err)
+		}
+	}
+
 	slog.Info("replaying all migrations on shadow database")
 	if err := RunMigrations(ctx, shadowDB, dialect, fsys, true, opts...); err != nil {
 		return fmt.Errorf("shadow replay failed: %w", err)
@@ -450,6 +468,32 @@ func resetShadow(ctx context.Context, shadowDB *sql.DB, dialect Dialect) error {
 	}
 	_, err = conn.ExecContext(ctx, dialect.ResetSQL())
 	return err
+}
+
+// psqlRestrictLine matches the \restrict and \unrestrict lines that pg_dump
+// adds to plain-text dumps. They are psql meta-commands, not SQL, so a
+// baseline taken from pg_dump would otherwise fail to run.
+var psqlRestrictLine = regexp.MustCompile(`(?m)^\\(?:un)?restrict(?:[ \t].*)?$`)
+
+// loadBaselines runs the baseline SQL on a dedicated connection and then
+// discards it. Baselines are often pg_dump output, which changes session
+// settings such as search_path; a discarded connection can't carry them into
+// the replay.
+func loadBaselines(ctx context.Context, shadowDB *sql.DB, baselines []string) error {
+	conn, err := shadowDB.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	defer conn.Raw(func(any) error { return driver.ErrBadConn })
+
+	for i, q := range baselines {
+		q = psqlRestrictLine.ReplaceAllString(q, "")
+		if _, err := conn.ExecContext(ctx, q); err != nil {
+			return fmt.Errorf("baseline %d: %w", i+1, err)
+		}
+	}
+	return nil
 }
 
 // TestCurrentMigration applies current.sql in a transaction and rolls it back,
