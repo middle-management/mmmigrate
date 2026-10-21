@@ -14,23 +14,44 @@ import (
 	"github.com/middle-management/mmmigrate/source"
 )
 
+// DefaultNamespace is the namespace used when none is given.
+const DefaultNamespace = "default"
+
 // Migrator handles database migrations.
 type Migrator struct {
 	db           *sql.DB
 	dialect      Dialect
 	fsys         fs.FS
 	applyCurrent bool
+	namespace    string
+}
+
+// Option configures a Migrator.
+type Option func(*Migrator)
+
+// WithNamespace scopes the migration history to ns, so several applications
+// can keep independent migrations in the same database. An empty ns means
+// DefaultNamespace.
+func WithNamespace(ns string) Option {
+	return func(m *Migrator) { m.namespace = ns }
 }
 
 // NewMigrator creates a new migrator instance. fsys is the filesystem rooted at
 // the migrations directory.
-func NewMigrator(db *sql.DB, dialect Dialect, fsys fs.FS, applyCurrent bool) *Migrator {
-	return &Migrator{
+func NewMigrator(db *sql.DB, dialect Dialect, fsys fs.FS, applyCurrent bool, opts ...Option) *Migrator {
+	m := &Migrator{
 		db:           db,
 		dialect:      dialect,
 		fsys:         fsys,
 		applyCurrent: applyCurrent,
 	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	if m.namespace == "" {
+		m.namespace = DefaultNamespace
+	}
+	return m
 }
 
 // querier is satisfied by both *sql.DB and *sql.Conn.
@@ -58,7 +79,7 @@ func (m *Migrator) ensureMigrationsTable(ctx context.Context, q querier) error {
 func (m *Migrator) getAppliedMigrations(ctx context.Context, q querier) (map[int]*source.Migration, error) {
 	applied := make(map[int]*source.Migration)
 
-	rows, err := q.QueryContext(ctx, m.dialect.SelectApplied())
+	rows, err := q.QueryContext(ctx, m.dialect.SelectApplied(), m.namespace)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get applied migrations: %w", err)
 	}
@@ -78,7 +99,7 @@ func (m *Migrator) getAppliedMigrations(ctx context.Context, q querier) (map[int
 
 func (m *Migrator) getCurrentChecksum(ctx context.Context, q querier) (string, error) {
 	var checksum string
-	err := q.QueryRowContext(ctx, m.dialect.SelectCurrentChecksum()).Scan(&checksum)
+	err := q.QueryRowContext(ctx, m.dialect.SelectCurrentChecksum(), m.namespace).Scan(&checksum)
 	if err == sql.ErrNoRows {
 		return "", nil
 	}
@@ -120,7 +141,7 @@ func (m *Migrator) runCurrentMigration(ctx context.Context, q querier, mig *sour
 		return formatSQLError(processedSQL, err, "failed to execute current.sql")
 	}
 
-	if _, err = tx.ExecContext(ctx, m.dialect.UpsertCurrent(), checksum); err != nil {
+	if _, err = tx.ExecContext(ctx, m.dialect.UpsertCurrent(), m.namespace, checksum); err != nil {
 		return fmt.Errorf("failed to record current.sql checksum: %w", err)
 	}
 
@@ -143,7 +164,7 @@ func (m *Migrator) runMigration(ctx context.Context, q querier, mig *source.Migr
 		return formatSQLError(mig.SQL, err, fmt.Sprintf("failed to execute migration %d (%s)", mig.Version, mig.Name))
 	}
 
-	if _, err = tx.ExecContext(ctx, m.dialect.InsertApplied(), mig.Version, mig.Name); err != nil {
+	if _, err = tx.ExecContext(ctx, m.dialect.InsertApplied(), m.namespace, mig.Version, mig.Name); err != nil {
 		return fmt.Errorf("failed to record migration %d: %w", mig.Version, err)
 	}
 
@@ -159,8 +180,8 @@ func (m *Migrator) runMigration(ctx context.Context, q querier, mig *source.Migr
 // release it on the same conn.
 func (m *Migrator) acquireLock(ctx context.Context, conn *sql.Conn) error {
 	if q := m.dialect.Lock(); q != "" {
-		slog.Debug("acquiring migration lock")
-		if _, err := conn.ExecContext(ctx, q); err != nil {
+		slog.Debug("acquiring migration lock", "namespace", m.namespace)
+		if _, err := conn.ExecContext(ctx, q, m.namespace); err != nil {
 			return fmt.Errorf("failed to acquire migration lock: %w", err)
 		}
 	}
@@ -172,18 +193,18 @@ func (m *Migrator) releaseLock(ctx context.Context, conn *sql.Conn) {
 	if q == "" {
 		return
 	}
-	slog.Debug("releasing migration lock")
+	slog.Debug("releasing migration lock", "namespace", m.namespace)
 
 	// Release even if ctx was cancelled mid-run.
 	var released sql.NullBool
-	err := conn.QueryRowContext(context.WithoutCancel(ctx), q).Scan(&released)
+	err := conn.QueryRowContext(context.WithoutCancel(ctx), q, m.namespace).Scan(&released)
 	if err == nil && released.Valid && released.Bool {
 		return
 	}
 
 	// The lock may still be held by this session. Discard the connection
 	// rather than return it to the pool, so closing it releases the lock.
-	slog.Warn("failed to release migration lock, discarding connection", "error", err)
+	slog.Warn("failed to release migration lock, discarding connection", "namespace", m.namespace, "error", err)
 	conn.Raw(func(any) error { return driver.ErrBadConn })
 }
 
@@ -248,8 +269,8 @@ func (m *Migrator) Run(ctx context.Context, migrations []*source.Migration) erro
 }
 
 // RunMigrations loads and applies all migrations from the given filesystem.
-func RunMigrations(ctx context.Context, db *sql.DB, dialect Dialect, fsys fs.FS, applyCurrent bool) error {
-	migrator := NewMigrator(db, dialect, fsys, applyCurrent)
+func RunMigrations(ctx context.Context, db *sql.DB, dialect Dialect, fsys fs.FS, applyCurrent bool, opts ...Option) error {
+	migrator := NewMigrator(db, dialect, fsys, applyCurrent, opts...)
 
 	migrations, err := source.LoadMigrations(fsys, applyCurrent)
 	if err != nil {
@@ -267,8 +288,8 @@ type MigrationStatus struct {
 }
 
 // Status returns the state of all migrations relative to the database.
-func Status(ctx context.Context, db *sql.DB, dialect Dialect, fsys fs.FS) ([]MigrationStatus, error) {
-	migrator := NewMigrator(db, dialect, fsys, false)
+func Status(ctx context.Context, db *sql.DB, dialect Dialect, fsys fs.FS, opts ...Option) ([]MigrationStatus, error) {
+	migrator := NewMigrator(db, dialect, fsys, false, opts...)
 
 	if err := migrator.ensureMigrationsTable(ctx, db); err != nil {
 		return nil, err
@@ -302,8 +323,8 @@ func Status(ctx context.Context, db *sql.DB, dialect Dialect, fsys fs.FS) ([]Mig
 }
 
 // DryRun returns the list of migrations that would be applied without executing them.
-func DryRun(ctx context.Context, db *sql.DB, dialect Dialect, fsys fs.FS, applyCurrent bool) ([]string, error) {
-	migrator := NewMigrator(db, dialect, fsys, applyCurrent)
+func DryRun(ctx context.Context, db *sql.DB, dialect Dialect, fsys fs.FS, applyCurrent bool, opts ...Option) ([]string, error) {
+	migrator := NewMigrator(db, dialect, fsys, applyCurrent, opts...)
 
 	if err := migrator.ensureMigrationsTable(ctx, db); err != nil {
 		return nil, err
@@ -358,14 +379,14 @@ func DryRun(ctx context.Context, db *sql.DB, dialect Dialect, fsys fs.FS, applyC
 
 // VerifyAgainstShadow resets a shadow database and replays all migrations plus
 // current.sql from scratch, verifying the full chain works on a clean database.
-func VerifyAgainstShadow(ctx context.Context, shadowDB *sql.DB, dialect Dialect, fsys fs.FS) error {
+func VerifyAgainstShadow(ctx context.Context, shadowDB *sql.DB, dialect Dialect, fsys fs.FS, opts ...Option) error {
 	slog.Info("resetting shadow database")
 	if _, err := shadowDB.ExecContext(ctx, dialect.ResetSQL()); err != nil {
 		return fmt.Errorf("failed to reset shadow database: %w", err)
 	}
 
 	slog.Info("replaying all migrations on shadow database")
-	if err := RunMigrations(ctx, shadowDB, dialect, fsys, true); err != nil {
+	if err := RunMigrations(ctx, shadowDB, dialect, fsys, true, opts...); err != nil {
 		return fmt.Errorf("shadow replay failed: %w", err)
 	}
 

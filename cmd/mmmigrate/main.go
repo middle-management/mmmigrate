@@ -86,6 +86,7 @@ func cmdApply(args []string) {
 	migrationsDir := fs.String("migrations", "migrations", "Path to migrations directory")
 	applyCurrent := fs.Bool("current", false, "Also apply current.sql (development mode)")
 	dryRun := fs.Bool("dry-run", false, "Show what would be applied without executing")
+	namespace := namespaceFlag(fs)
 	fs.Parse(args)
 
 	absDir := resolveDir(*migrationsDir)
@@ -96,7 +97,7 @@ func cmdApply(args []string) {
 	fsys := os.DirFS(absDir)
 
 	if *dryRun {
-		pending, err := mmmigrate.DryRun(ctx, db, dialect, fsys, *applyCurrent)
+		pending, err := mmmigrate.DryRun(ctx, db, dialect, fsys, *applyCurrent, namespace())
 		if err != nil {
 			fatal("%v", err)
 		}
@@ -111,7 +112,7 @@ func cmdApply(args []string) {
 		return
 	}
 
-	if err := mmmigrate.RunMigrations(ctx, db, dialect, fsys, *applyCurrent); err != nil {
+	if err := mmmigrate.RunMigrations(ctx, db, dialect, fsys, *applyCurrent, namespace()); err != nil {
 		fatal("%v", err)
 	}
 	fmt.Println("✓ Migrations completed successfully")
@@ -124,6 +125,7 @@ func cmdCommit(args []string) {
 	migrationsDir := fs.String("migrations", "migrations", "Path to migrations directory")
 	description := fs.String("description", "", "Description for the committed migration (required)")
 	skipVerify := fs.Bool("skip-verify", false, "Skip migration verification (commit without testing against a database)")
+	namespace := namespaceFlag(fs)
 	fs.Parse(args)
 
 	if *description == "" {
@@ -164,7 +166,7 @@ func cmdCommit(args []string) {
 
 			ctx := context.Background()
 			fmt.Println("Verifying full migration chain against shadow database...")
-			if err := mmmigrate.VerifyAgainstShadow(ctx, shadowDB, dialect, os.DirFS(absDir)); err != nil {
+			if err := mmmigrate.VerifyAgainstShadow(ctx, shadowDB, dialect, os.DirFS(absDir), namespace()); err != nil {
 				fatal("shadow verification failed: %v", err)
 			}
 			fmt.Println("✓ Shadow database verification passed")
@@ -187,6 +189,7 @@ func cmdStatus(args []string) {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
 	databaseURL := fs.String("database-url", "", "Database connection URL (defaults to DATABASE_URL env var)")
 	migrationsDir := fs.String("migrations", "migrations", "Path to migrations directory")
+	namespace := namespaceFlag(fs)
 	fs.Parse(args)
 
 	absDir := resolveDir(*migrationsDir)
@@ -194,7 +197,7 @@ func cmdStatus(args []string) {
 	defer cleanup()
 
 	ctx := context.Background()
-	statuses, err := mmmigrate.Status(ctx, db, dialect, os.DirFS(absDir))
+	statuses, err := mmmigrate.Status(ctx, db, dialect, os.DirFS(absDir), namespace())
 	if err != nil {
 		fatal("%v", err)
 	}
@@ -253,6 +256,19 @@ func cmdValidate(args []string) {
 		fatal("validation failed: %v", err)
 	}
 	fmt.Println("✓ All migrations verified (checksums and chain integrity)")
+}
+
+// namespaceFlag registers the -namespace flag on fs. The returned function
+// resolves it (falling back to the MMMIGRATE_NAMESPACE env var) once fs has
+// been parsed.
+func namespaceFlag(fs *flag.FlagSet) func() mmmigrate.Option {
+	ns := fs.String("namespace", "", "Migration history namespace, for several apps sharing one database (defaults to MMMIGRATE_NAMESPACE env var, then \""+mmmigrate.DefaultNamespace+"\")")
+	return func() mmmigrate.Option {
+		if *ns == "" {
+			return mmmigrate.WithNamespace(os.Getenv("MMMIGRATE_NAMESPACE"))
+		}
+		return mmmigrate.WithNamespace(*ns)
+	}
 }
 
 func resolveDir(dir string) string {

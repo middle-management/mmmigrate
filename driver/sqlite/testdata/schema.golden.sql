@@ -2,9 +2,11 @@
 
 -- table: mmmigrate_applied
 CREATE TABLE mmmigrate_applied (
-			version     INTEGER PRIMARY KEY,
+			namespace   TEXT NOT NULL,
+			version     INTEGER NOT NULL,
 			name        TEXT NOT NULL,
-			applied_at  TEXT NOT NULL DEFAULT (datetime('now'))
+			applied_at  TEXT NOT NULL DEFAULT (datetime('now')),
+			PRIMARY KEY (namespace, version)
 		);
 
 -- table: posts

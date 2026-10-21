@@ -63,6 +63,7 @@ Promises with the pglite-shaped result `{ rows, fields, affectedRows }`.
 | `fs` | `{ readDir, readFile }` | required | filesystem adapter |
 | `dialect` | `'postgres' \| 'sqlite'` | `'postgres'` | which `Dialect` to use |
 | `applyCurrent` | `boolean` | `true` | also re-run `current.sql` |
+| `namespace` | `string` | `'default'` | migration history [namespace](namespaces.md) |
 
 `render` returns the expanded `current.sql` (with `@include` directives
 inlined) — useful for previewing what `apply` would actually execute.

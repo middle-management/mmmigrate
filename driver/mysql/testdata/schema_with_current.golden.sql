@@ -1,12 +1,13 @@
 -- server: 8.4.8
 
 -- table: mmmigrate_applied
+  namespace varchar(255) NOT NULL
   version int NOT NULL
   name varchar(255) NOT NULL
   applied_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
 
 -- table: mmmigrate_current
-  id int NOT NULL DEFAULT 1
+  namespace varchar(255) NOT NULL
   checksum varchar(64) NOT NULL
   applied_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
 

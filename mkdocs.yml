@@ -59,6 +59,7 @@ nav:
   - Integrity: integrity.md
   - Shadow database: shadow-database.md
   - Concurrency: concurrency.md
+  - Namespaces: namespaces.md
   - Drivers:
       - drivers/index.md
       - PostgreSQL: drivers/postgres.md

@@ -23,22 +23,24 @@ user:password@tcp(host:3306)/dbname?multiStatements=true&parseTime=true
 
 | Table | Purpose |
 |------|---------|
-| `mmmigrate_applied` | One row per applied numbered migration |
-| `mmmigrate_current` | Tracks the checksum of `current.sql` |
+| `mmmigrate_applied` | One row per applied numbered migration, per [namespace](../namespaces.md) |
+| `mmmigrate_current` | One row per namespace tracking the checksum of `current.sql` |
+
+Both tables carry a `namespace` column; without configuration everything is recorded under `default`.
 
 MySQL uses an `mmmigrate_` table-name prefix rather than a dedicated schema.
 
 ## Locking
 
-Concurrent applies are serialized through a MySQL **named lock**:
+Concurrent applies are serialized through a MySQL **named lock**, taken per [namespace](../namespaces.md). The name is hashed to stay under MySQL's 64-character lock-name limit:
 
 ```sql
-SELECT GET_LOCK('mmmigrate', -1);
+SELECT GET_LOCK(CONCAT('mmmigrate:', LEFT(SHA2('default', 256), 40)), -1);
 -- ... apply migrations ...
-SELECT RELEASE_LOCK('mmmigrate');
+SELECT RELEASE_LOCK(CONCAT('mmmigrate:', LEFT(SHA2('default', 256), 40)));
 ```
 
-`-1` means "wait indefinitely". The lock is released automatically when the connection closes.
+`-1` means "wait indefinitely". Applies in different namespaces don't block each other. The lock is released automatically when the connection closes.
 
 ## DDL caveats
 

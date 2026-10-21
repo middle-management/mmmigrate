@@ -181,6 +181,7 @@ func Run(t *testing.T, h Harness) {
 	t.Run("ShadowVerification", func(t *testing.T) { testShadow(t, h) })
 	t.Run("Status", func(t *testing.T) { testStatus(t, h) })
 	t.Run("DryRun", func(t *testing.T) { testDryRun(t, h) })
+	t.Run("Namespaces", func(t *testing.T) { testNamespaces(t, h) })
 	t.Run("ConcurrentApply", func(t *testing.T) { testConcurrentApply(t, h) })
 	t.Run("SingleConnectionPool", func(t *testing.T) { testSingleConnectionPool(t, h) })
 }
@@ -419,6 +420,83 @@ func testDryRun(t *testing.T, h Harness) {
 		t.Fatal(err)
 	}
 	assertStrings(t, "after editing current.sql", pending, []string{"current.sql"})
+}
+
+// testNamespaces runs two independent migration histories, with overlapping
+// version numbers and their own current.sql, against the same database.
+func testNamespaces(t *testing.T, h Harness) {
+	db := h.OpenDB(t)
+	ctx := context.Background()
+	d := h.Dialect(t)
+
+	// Drivers sharing a server database only reset the fixture tables, so
+	// clean up the tables this test creates.
+	t.Cleanup(func() {
+		for _, table := range []string{"ns_a", "ns_a_extra", "ns_b", "ns_b_extra"} {
+			db.Exec("DROP TABLE IF EXISTS " + table)
+		}
+	})
+
+	dirA := t.TempDir()
+	writeSQL(t, dirA, "001_create_a.sql", `CREATE TABLE ns_a (id INTEGER PRIMARY KEY);`)
+	writeSQL(t, dirA, "current.sql", `CREATE TABLE IF NOT EXISTS ns_a_extra (id INTEGER PRIMARY KEY);`)
+	fsA := os.DirFS(dirA)
+	nsA := mmmigrate.WithNamespace("app_a")
+
+	dirB := t.TempDir()
+	writeSQL(t, dirB, "001_create_b.sql", `CREATE TABLE ns_b (id INTEGER PRIMARY KEY);`)
+	writeSQL(t, dirB, "current.sql", `CREATE TABLE IF NOT EXISTS ns_b_extra (id INTEGER PRIMARY KEY);`)
+	fsB := os.DirFS(dirB)
+	nsB := mmmigrate.WithNamespace("app_b")
+
+	if err := mmmigrate.RunMigrations(ctx, db, d, fsA, true, nsA); err != nil {
+		t.Fatal(err)
+	}
+	// B's 001 must not be mistaken for A's 001.
+	if err := mmmigrate.RunMigrations(ctx, db, d, fsB, true, nsB); err != nil {
+		t.Fatal(err)
+	}
+
+	if n := rowCount(t, db, h.TrackingTable); n != 2 {
+		t.Errorf("expected 2 applied migrations across namespaces, got %d", n)
+	}
+	for _, table := range []string{"ns_a", "ns_a_extra", "ns_b", "ns_b_extra"} {
+		rowCount(t, db, table) // fails the test if the table is missing
+	}
+
+	// Each namespace sees only its own history, and B's current.sql checksum
+	// must not have replaced A's.
+	for _, tc := range []struct {
+		label string
+		fsys  fs.FS
+		ns    mmmigrate.Option
+		name  string
+	}{
+		{"app_a", fsA, nsA, "create_a"},
+		{"app_b", fsB, nsB, "create_b"},
+	} {
+		statuses, err := mmmigrate.Status(ctx, db, d, tc.fsys, tc.ns)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := mmmigrate.MigrationStatus{Version: 1, Name: tc.name, Applied: true}
+		if len(statuses) != 1 || statuses[0] != want {
+			t.Errorf("%s: status = %+v, want [%+v]", tc.label, statuses, want)
+		}
+
+		pending, err := mmmigrate.DryRun(ctx, db, d, tc.fsys, true, tc.ns)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertStrings(t, tc.label+" pending", pending, nil)
+	}
+
+	// The default namespace is untouched.
+	pending, err := mmmigrate.DryRun(ctx, db, d, fsA, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertStrings(t, "default namespace", pending, []string{"001_create_a.sql", "current.sql"})
 }
 
 // testConcurrentApply runs several applies at once through a connection pool

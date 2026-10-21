@@ -119,13 +119,13 @@ The fix is to tell mmmigrate those migrations are already in place. First let it
 mmmigrate status     # creates the tracking table, lists every migration as pending
 ```
 
-Then insert one row per migration that the database already has. `applied_at` defaults, and only `version` is matched against the files — `name` is for humans — so one statement covers every driver except for the table name:
+Then insert one row per migration that the database already has. `applied_at` defaults, and only `version` is matched against the files — `name` is for humans. `namespace` has no default, so it must be given; use `default` unless you run mmmigrate with a [namespace](namespaces.md). One statement covers every driver except for the table name:
 
 ```sql
 -- PostgreSQL
-INSERT INTO mmmigrate.applied (version, name) VALUES
-  (1, 'initial_schema'),
-  (2, 'add_users');
+INSERT INTO mmmigrate.applied (namespace, version, name) VALUES
+  ('default', 1, 'initial_schema'),
+  ('default', 2, 'add_users');
 
 -- SQLite and MySQL: same statement against mmmigrate_applied
 ```
@@ -135,7 +135,7 @@ Generate the rows from the filenames rather than typing them, and cut the list o
 ```bash
 for f in migrations/[0-9]*.sql; do
   b=$(basename "$f" .sql)
-  printf "  (%d, '%s'),\n" "$((10#${b%%_*}))" "${b#*_}"
+  printf "  ('default', %d, '%s'),\n" "$((10#${b%%_*}))" "${b#*_}"
 done
 ```
 

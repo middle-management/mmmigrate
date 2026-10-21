@@ -33,6 +33,10 @@ await mm.apply(db, {
 })
 ```
 
+Options are `fs` (required), `dialect` (`'postgres'` by default, or
+`'sqlite'`), `applyCurrent`, and `namespace` (defaults to `'default'`; keeps
+a separate migration history).
+
 Three FS adapters ship with the glue:
 
 | Adapter | When to use |

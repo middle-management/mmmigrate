@@ -60,7 +60,7 @@ DATABASE_URL="postgres://prod/myapp" mmmigrate apply
 
 *`commit` does not need a database connection when `-skip-verify` is used.
 
-All commands accept `-migrations DIR` (default `migrations`). Database commands accept `-database-url URL` (default `DATABASE_URL` env).
+All commands accept `-migrations DIR` (default `migrations`). Database commands accept `-database-url URL` (default `DATABASE_URL` env). `apply`, `status`, `commit` and `watch` also accept `-namespace NAME` (default `MMMIGRATE_NAMESPACE` env, then `default`) so several apps can share one database.
 
 ## Learn more
 

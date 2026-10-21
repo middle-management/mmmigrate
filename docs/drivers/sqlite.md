@@ -23,8 +23,10 @@ The `DATABASE_URL` environment variable is honored as well.
 
 | Table | Purpose |
 |------|---------|
-| `mmmigrate_applied` | One row per applied numbered migration |
-| `mmmigrate_current` | Tracks the checksum of `current.sql` |
+| `mmmigrate_applied` | One row per applied numbered migration, per [namespace](../namespaces.md) |
+| `mmmigrate_current` | One row per namespace tracking the checksum of `current.sql` |
+
+Both tables carry a `namespace` column; without configuration everything is recorded under `default`.
 
 SQLite doesn't have schemas, so the tables live in the main database namespace with an `mmmigrate_` prefix.
 
@@ -32,7 +34,7 @@ SQLite doesn't have schemas, so the tables live in the main database namespace w
 
 SQLite serializes writes through native **file-level locking**, which is built into the database engine. mmmigrate doesn't need to acquire an explicit lock — the underlying SQLite library handles concurrent access correctly across processes.
 
-If you run `mmmigrate apply` in two processes against the same file, one will block on the SQLite write lock until the other finishes.
+If you run `mmmigrate apply` in two processes against the same file, one will block on the SQLite write lock until the other finishes. This holds across [namespaces](../namespaces.md) too: file-level locking can't tell them apart, so applies in different namespaces still take turns.
 
 ## Transactional DDL
 

@@ -1,6 +1,6 @@
 # Commands
 
-All commands accept `-migrations DIR` (default: `migrations`). Database commands accept `-database-url URL`, defaulting to the `DATABASE_URL` environment variable.
+All commands accept `-migrations DIR` (default: `migrations`). Database commands accept `-database-url URL`, defaulting to the `DATABASE_URL` environment variable. `apply`, `status`, `commit` and `watch` also accept `-namespace NAME` (default: the `MMMIGRATE_NAMESPACE` environment variable, then `default`) to keep a separate migration history when several apps share one database. See [Namespaces](namespaces.md).
 
 ## Reference
 
@@ -34,6 +34,7 @@ mmmigrate apply                # production: committed migrations only
 mmmigrate apply -current       # development: also runs current.sql
 mmmigrate apply -dry-run       # print what would run, don't execute
 mmmigrate apply -current -dry-run
+mmmigrate apply -namespace billing   # separate history, see Namespaces
 ```
 
 Runs all pending committed migrations in version order. Already-applied migrations are skipped via the tracking table.
@@ -63,6 +64,8 @@ Tests `current.sql` against the database, then writes a numbered migration file:
 
 `SHADOW_DATABASE_URL` is honored when `-shadow-url` is not passed.
 
+`-namespace` selects the migration history used for the shadow replay. Use the same namespace as for `apply`, and give each app its own shadow database — see [Namespaces](namespaces.md#shadow-databases).
+
 ## `revert`
 
 ```bash
@@ -75,6 +78,7 @@ Moves the most recent committed migration back into `current.sql`, restoring any
 
 ```bash
 mmmigrate status
+mmmigrate status -namespace billing
 ```
 
 Prints each migration with its applied/pending state and checksum. Useful for confirming production matches your repo before a deploy.
@@ -111,6 +115,7 @@ A common CI gate is `mmmigrate check && mmmigrate validate`.
 ```bash
 mmmigrate watch                       # default 200ms debounce
 mmmigrate watch -debounce 500ms
+mmmigrate watch -namespace billing
 ```
 
 Watches `current.sql` and any `@include`d files. On change, re-runs `apply -current`. Picks up new include directives automatically after the next save. Stop with `Ctrl-C`.

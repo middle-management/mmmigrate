@@ -1,4 +1,5 @@
 -- table: mmmigrate.applied
+  namespace text NOT NULL
   version integer NOT NULL
   name text NOT NULL
   applied_at timestamp with time zone NOT NULL DEFAULT now()

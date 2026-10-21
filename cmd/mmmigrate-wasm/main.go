@@ -16,6 +16,7 @@
 //	  fs:           { readDir(p): Promise<entries>, readFile(p): Promise<bytes> },
 //	  dialect:      'postgres' | 'sqlite',  // default 'postgres'
 //	  applyCurrent: bool,                   // default true (apply only)
+//	  namespace:    string,                 // default "default" (apply only)
 //	}
 //
 // A companion JS module (glue/mmmigrate.mjs) ships ready-made adapters for
@@ -46,7 +47,7 @@ func main() {
 	select {}
 }
 
-// apply: (jsDb, { fs, dialect?, applyCurrent? }) -> Promise<{ ok: true }>
+// apply: (jsDb, { fs, dialect?, applyCurrent?, namespace? }) -> Promise<{ ok: true }>
 func apply(this js.Value, args []js.Value) any {
 	if len(args) < 2 {
 		return rejectedPromise(fmt.Errorf("mmmigrate.apply: expected (jsDb, options)"))
@@ -69,13 +70,18 @@ func apply(this js.Value, args []js.Value) any {
 		applyCurrent = v.Bool()
 	}
 
+	var namespace string
+	if v := opts.Get("namespace"); !v.IsUndefined() && !v.IsNull() {
+		namespace = v.String()
+	}
+
 	return goPromise(func() (any, error) {
 		conn := sql.OpenDB(jsdb.NewConnector(db))
 		defer conn.Close()
 
 		fsys := jsfs.New(fsAdapter)
 		ctx := context.Background()
-		if err := mmmigrate.RunMigrations(ctx, conn, dialect, fsys, applyCurrent); err != nil {
+		if err := mmmigrate.RunMigrations(ctx, conn, dialect, fsys, applyCurrent, mmmigrate.WithNamespace(namespace)); err != nil {
 			return nil, err
 		}
 		return js.ValueOf(map[string]any{"ok": true}), nil

@@ -12,38 +12,40 @@ func (Dialect) DriverName() string { return "sqlitejs" }
 func (Dialect) CreateMigrationsTable() string {
 	return `
 		CREATE TABLE IF NOT EXISTS mmmigrate_applied (
-			version     INTEGER PRIMARY KEY,
+			namespace   TEXT NOT NULL,
+			version     INTEGER NOT NULL,
 			name        TEXT NOT NULL,
-			applied_at  TEXT NOT NULL DEFAULT (datetime('now'))
+			applied_at  TEXT NOT NULL DEFAULT (datetime('now')),
+			PRIMARY KEY (namespace, version)
 		)`
 }
 
 func (Dialect) CreateCurrentTable() string {
 	return `
 		CREATE TABLE IF NOT EXISTS mmmigrate_current (
-			id          INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+			namespace   TEXT PRIMARY KEY,
 			checksum    TEXT NOT NULL,
 			applied_at  TEXT NOT NULL DEFAULT (datetime('now'))
 		)`
 }
 
 func (Dialect) SelectApplied() string {
-	return "SELECT version, name, applied_at FROM mmmigrate_applied ORDER BY version"
+	return "SELECT version, name, applied_at FROM mmmigrate_applied WHERE namespace = ? ORDER BY version"
 }
 
 func (Dialect) SelectCurrentChecksum() string {
-	return "SELECT checksum FROM mmmigrate_current WHERE id = 1"
+	return "SELECT checksum FROM mmmigrate_current WHERE namespace = ?"
 }
 
 func (Dialect) InsertApplied() string {
-	return "INSERT INTO mmmigrate_applied (version, name, applied_at) VALUES (?, ?, datetime('now'))"
+	return "INSERT INTO mmmigrate_applied (namespace, version, name, applied_at) VALUES (?, ?, ?, datetime('now'))"
 }
 
 func (Dialect) UpsertCurrent() string {
 	return `
-		INSERT INTO mmmigrate_current (id, checksum, applied_at)
-		VALUES (1, ?, datetime('now'))
-		ON CONFLICT(id) DO UPDATE SET
+		INSERT INTO mmmigrate_current (namespace, checksum, applied_at)
+		VALUES (?, ?, datetime('now'))
+		ON CONFLICT(namespace) DO UPDATE SET
 			checksum = excluded.checksum,
 			applied_at = excluded.applied_at`
 }

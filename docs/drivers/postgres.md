@@ -22,22 +22,24 @@ The PostgreSQL driver creates a dedicated schema for its bookkeeping:
 
 | Table | Purpose |
 |------|---------|
-| `mmmigrate.applied` | One row per applied numbered migration |
-| `mmmigrate.current` | Tracks the checksum of `current.sql` so it's only re-run on change |
+| `mmmigrate.applied` | One row per applied numbered migration, per [namespace](../namespaces.md) |
+| `mmmigrate.current` | One row per namespace tracking the checksum of `current.sql` so it's only re-run on change |
+
+Both tables carry a `namespace` column (`applied` is keyed by `(namespace, version)`, `current` by `namespace`). Without configuration everything is recorded under the namespace `default`.
 
 Using a separate schema keeps mmmigrate's tables out of `public` and clear of your application's namespace.
 
 ## Locking
 
-Concurrent applies are serialized through a PostgreSQL **advisory lock** keyed to the integer `1833701705`:
+Concurrent applies are serialized through a PostgreSQL **advisory lock**, taken per [namespace](../namespaces.md). It uses the two-key form: the first key (`1833701705`) identifies mmmigrate, the second is a hash of the namespace:
 
 ```sql
-SELECT pg_advisory_lock(1833701705);
+SELECT pg_advisory_lock(1833701705, hashtext('default'));
 -- ... apply migrations ...
-SELECT pg_advisory_unlock(1833701705);
+SELECT pg_advisory_unlock(1833701705, hashtext('default'));
 ```
 
-The lock is automatically released if the connection is dropped.
+Applies in the same namespace serialize; applies in different namespaces don't block each other. The lock is automatically released if the connection is dropped.
 
 ## Transactional DDL
 
