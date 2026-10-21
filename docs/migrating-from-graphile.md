@@ -123,6 +123,7 @@ It changes nothing and stops with an error when:
 - the matches have a gap, such as files 1, 2 and 4 matching but 3 not, so files were edited, renamed or reordered;
 - the database has a Graphile migration after the last file that matched, so the files are behind the database;
 - `SCHEMA` exists but no file matches, so the app's objects are there with no record of how they got there.
+- files match but `SCHEMA` doesn't exist, so the history may be another app's. Graphile hashes SQL before `:PLACEHOLDER` substitution, so apps built from the same template share hashes even when their placeholders name different schemas.
 
 If the namespace already has applied migrations it does nothing, so running it twice is safe. If neither Graphile's history nor `SCHEMA` exists, it also does nothing, and `apply` builds the database from scratch.
 
@@ -173,8 +174,9 @@ mmmigrate status -namespace "$NAMESPACE" >/dev/null
     b=$(basename "$f" .sql)
     h=$(sed -n 's/^--! Hash: *//p' "$f" | head -n1)
     hash=NULL; [ -n "$h" ] && hash="'$h'"
+    name=${b#*_}; name=${name//\'/\'\'}
     printf "INSERT INTO adopt_files (version, name, hash) VALUES (%d, '%s', %s);\n" \
-      "$((10#${b%%_*}))" "${b#*_}" "$hash"
+      "$((10#${b%%_*}))" "$name" "$hash"
   done
   cat <<'SQL'
 CREATE TEMP TABLE adopt_params AS SELECT :'ns'::text AS ns, nullif(:'schema', '') AS schema;
@@ -186,6 +188,7 @@ DECLARE
   last_hash text;
   gap int;
   ahead text;
+  schema_exists bool;
 BEGIN
   SELECT * INTO p FROM adopt_params;
   -- The lock `mmmigrate apply` takes for this namespace, held until commit.
@@ -199,8 +202,13 @@ BEGIN
              FROM graphile_migrate.migrations m WHERE m.hash = f.hash';
   END IF;
   SELECT count(*), max(version) INTO n, last_version FROM adopt_files WHERE matched;
+  -- Compared exactly, so a mixed-case schema such as "MyApp" is found.
+  schema_exists := EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = p.schema);
+  IF n > 0 AND p.schema IS NOT NULL AND NOT schema_exists THEN
+    RAISE EXCEPTION 'migrations match graphile_migrate.migrations, but schema % does not exist: this may be another app''s history (for example the same files with different placeholder values)', p.schema;
+  END IF;
   IF n = 0 THEN
-    IF p.schema IS NOT NULL AND to_regnamespace(p.schema) IS NOT NULL THEN
+    IF schema_exists THEN
       RAISE EXCEPTION 'schema % exists, but no migration file matches graphile_migrate.migrations: apply would replay over live data', p.schema;
     END IF;
     RAISE NOTICE 'no Graphile history for these files; nothing to adopt, apply will build from scratch';
@@ -226,7 +234,7 @@ SQL
 )
 ```
 
-Expect a `NOTICE` line saying what it did. The first time, mmmigrate also logs an `INFO` line as it creates its own tables. If it stops on the body check because you edited a migration on purpose (for example to hard-code a placeholder in step 4), review that diff, then rerun the block with `ALLOW_EDITED=1` set. Any other error means the database and the files disagree: resolve that before running `apply` against this database.
+Expect a `NOTICE` line saying what it did. The first time, mmmigrate also logs an `INFO` line as it creates its own tables. If it stops on the body check because you edited a migration on purpose (for example to hard-code a placeholder in step 4), review that diff, then rerun the block with `ALLOW_EDITED=1` set. When the edit replaced a placeholder, first confirm that the value you hard-coded is the one Graphile substituted when it ran that migration against *this* database. Any other error means the database and the files disagree: resolve that before running `apply` against this database.
 
 **Check:** `mmmigrate apply -dry-run -namespace "$NAMESPACE"` must list only migrations you wrote after the port, which is none right after porting. If it lists one this database already has, stop: don't `apply`.
 
