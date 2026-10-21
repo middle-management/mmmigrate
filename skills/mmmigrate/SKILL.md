@@ -124,3 +124,4 @@ PostgreSQL and SQLite do not have this limitation.
 | Committing without DB | `commit` tests SQL against a real database — provide DATABASE_URL |
 | Non-idempotent current.sql | current.sql is re-run when it changes — use `IF NOT EXISTS`, `DROP ... CREATE`, etc. |
 | Duplicate version numbers | Two files with the same `NNN_` prefix will error on load |
+| `apply` on a database graphile-migrate already migrated | It replays the whole history. Adopt it first with step 6 of `docs/migrating-from-graphile.md` (matches files by `--! Hash:`, refuses when unsure); never hand-insert `applied` rows by number |

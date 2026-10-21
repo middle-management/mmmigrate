@@ -107,41 +107,138 @@ mmmigrate has no `beforeReset`/`afterReset`/`beforeAll`/`afterAll` equivalents. 
 
 ### 6. Record existing migrations as applied
 
-**Do this before the first `apply` against any database Graphile has already migrated.** mmmigrate works out what to run purely from its own tracking table, which starts empty, so it will otherwise replay your whole history against a live database and fail on the first statement:
+**Do this before the first `apply` against any database Graphile has already migrated.** mmmigrate works out what to run purely from its own tracking table, which starts empty, so it will otherwise replay your whole history against a live database. At best that fails on the first statement:
 
 ```
 Error: failed to execute migration 1 (initial): ERROR: relation "users" already exists
 ```
 
-The fix is to tell mmmigrate those migrations are already in place. First let it create the tracking table — `mmmigrate status` does that and changes nothing else:
+At worst it succeeds. A first migration that starts with `DROP SCHEMA app CASCADE`, which is common in Graphile projects because `current.sql` must be idempotent, wipes the data.
+
+The script below tells mmmigrate which migrations the database has already run, and nothing else. It decides by **content, not by number**: a file counts as applied only when its `--! Hash:` header (which step 2 kept) appears in `graphile_migrate.migrations`. Numbers aren't safe, because in a database shared with another app, that app's Graphile history has its own `000001.sql`.
+
+It changes nothing and stops with an error when:
+
+- a file's body no longer matches its own `--! Hash:` header, so it was edited after Graphile ran it;
+- the matches have a gap, such as files 1, 2 and 4 matching but 3 not, so files were edited, renamed or reordered;
+- the database has a Graphile migration after the last file that matched, so the files are behind the database;
+- `SCHEMA` exists but no file matches, so the app's objects are there with no record of how they got there.
+- files match but `SCHEMA` doesn't exist, so the history may be another app's. Graphile hashes SQL before `:PLACEHOLDER` substitution, so apps built from the same template share hashes even when their placeholders name different schemas.
+
+If the namespace already has applied migrations it does nothing, so running it twice is safe. If neither Graphile's history nor `SCHEMA` exists, it also does nothing, and `apply` builds the database from scratch.
+
+Set the three values at the top for the database you're adopting, then run the block from the project root. It needs `node` (you have it for Graphile) and `psql`:
 
 ```bash
-mmmigrate status     # creates the tracking table, lists every migration as pending
+export DATABASE_URL=postgres://localhost/myapp   # a database Graphile migrated
+NAMESPACE=default   # the -namespace you run mmmigrate with
+SCHEMA=app          # a schema your migrations create, or "" if none
+
+(
+set -euo pipefail
+
+# 1. Every Graphile file must still match its own --! Hash: header. Graphile
+#    computes it from the previous hash and the body below the headers.
+node -e '
+const fs = require("fs"), crypto = require("crypto");
+let bad = false;
+for (const f of process.argv.slice(1)) {
+  const lines = fs.readFileSync(f, "utf8").split("\n"), h = {};
+  let i = 0;
+  for (; i < lines.length; i++) {
+    const m = /^--! ([A-Z][a-zA-Z0-9_]*)(?::(.*))?$/.exec(lines[i]);
+    if (!m) break;
+    h[m[1]] = m[2] ? m[2].trim() : "";
+  }
+  if (!h.Hash) continue; // written by mmmigrate, not Graphile
+  const prev = h.Previous && h.Previous !== "-" ? h.Previous : "";
+  const body = lines.slice(i).join("\n").trim() + "\n";
+  const hash = "sha1:" + crypto.createHash("sha1")
+    .update((prev + "\n" + body.trim()).trim() + "\n").digest("hex");
+  if (hash !== h.Hash && !("AllowInvalidHash" in h) && !process.env.ALLOW_EDITED) {
+    console.error(f + ": body does not match its --! Hash: header");
+    bad = true;
+  }
+}
+process.exit(bad ? 1 : 0);
+' migrations/[0-9]*.sql
+
+# 2. Create mmmigrate's tracking tables.
+mmmigrate status -namespace "$NAMESPACE" >/dev/null
+
+# 3. Record the files whose hash the database has, holding the same lock
+#    as `mmmigrate apply` for this namespace.
+{
+  echo "CREATE TEMP TABLE adopt_files (version int PRIMARY KEY, name text NOT NULL, hash text, matched bool NOT NULL DEFAULT false);"
+  for f in migrations/[0-9]*.sql; do
+    b=$(basename "$f" .sql)
+    h=$(sed -n 's/^--! Hash: *//p' "$f" | head -n1)
+    hash=NULL; [ -n "$h" ] && hash="'$h'"
+    name=${b#*_}; name=${name//\'/\'\'}
+    printf "INSERT INTO adopt_files (version, name, hash) VALUES (%d, '%s', %s);\n" \
+      "$((10#${b%%_*}))" "$name" "$hash"
+  done
+  cat <<'SQL'
+CREATE TEMP TABLE adopt_params AS SELECT :'ns'::text AS ns, nullif(:'schema', '') AS schema;
+DO $$
+DECLARE
+  p adopt_params;
+  n int;
+  last_version int;
+  last_hash text;
+  gap int;
+  ahead text;
+  schema_exists bool;
+BEGIN
+  SELECT * INTO p FROM adopt_params;
+  -- The lock `mmmigrate apply` takes for this namespace, held until commit.
+  PERFORM pg_advisory_xact_lock(1833701705, hashtext(p.ns));
+  IF EXISTS (SELECT 1 FROM mmmigrate.applied WHERE namespace = p.ns) THEN
+    RAISE NOTICE 'namespace % already has applied migrations; nothing to do', p.ns;
+    RETURN;
+  END IF;
+  IF to_regclass('graphile_migrate.migrations') IS NOT NULL THEN
+    EXECUTE 'UPDATE adopt_files f SET matched = true
+             FROM graphile_migrate.migrations m WHERE m.hash = f.hash';
+  END IF;
+  SELECT count(*), max(version) INTO n, last_version FROM adopt_files WHERE matched;
+  -- Compared exactly, so a mixed-case schema such as "MyApp" is found.
+  schema_exists := EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = p.schema);
+  IF n > 0 AND p.schema IS NOT NULL AND NOT schema_exists THEN
+    RAISE EXCEPTION 'migrations match graphile_migrate.migrations, but schema % does not exist: this may be another app''s history (for example the same files with different placeholder values)', p.schema;
+  END IF;
+  IF n = 0 THEN
+    IF schema_exists THEN
+      RAISE EXCEPTION 'schema % exists, but no migration file matches graphile_migrate.migrations: apply would replay over live data', p.schema;
+    END IF;
+    RAISE NOTICE 'no Graphile history for these files; nothing to adopt, apply will build from scratch';
+    RETURN;
+  END IF;
+  SELECT min(version) INTO gap FROM adopt_files WHERE NOT matched AND version < last_version;
+  IF gap IS NOT NULL THEN
+    RAISE EXCEPTION 'migration % is not in graphile_migrate.migrations but later ones are: files were edited, renamed or reordered', gap;
+  END IF;
+  SELECT hash INTO last_hash FROM adopt_files WHERE version = last_version;
+  EXECUTE 'SELECT filename FROM graphile_migrate.migrations WHERE previous_hash = $1'
+    INTO ahead USING last_hash;
+  IF ahead IS NOT NULL THEN
+    RAISE EXCEPTION 'the database ran Graphile migration % after the last matching file (%): bring the files up to date first', ahead, last_version;
+  END IF;
+  INSERT INTO mmmigrate.applied (namespace, version, name)
+    SELECT p.ns, version, name FROM adopt_files WHERE matched;
+  RAISE NOTICE 'adopted % migrations (up to %) into namespace %', n, last_version, p.ns;
+END $$;
+SQL
+} | psql "$DATABASE_URL" -X -q -v ON_ERROR_STOP=1 --single-transaction \
+      -v ns="$NAMESPACE" -v schema="$SCHEMA"
+)
 ```
 
-Then insert one row per migration that the database already has. `applied_at` defaults, and only `version` is matched against the files — `name` is for humans. `namespace` has no default, so it must be given; use `default` unless you run mmmigrate with a [namespace](namespaces.md). One statement covers every driver except for the table name:
+Expect a `NOTICE` line saying what it did. The first time, mmmigrate also logs an `INFO` line as it creates its own tables. If it stops on the body check because you edited a migration on purpose (for example to hard-code a placeholder in step 4), review that diff, then rerun the block with `ALLOW_EDITED=1` set. When the edit replaced a placeholder, first confirm that the value you hard-coded is the one Graphile substituted when it ran that migration against *this* database. Any other error means the database and the files disagree: resolve that before running `apply` against this database.
 
-```sql
--- PostgreSQL
-INSERT INTO mmmigrate.applied (namespace, version, name) VALUES
-  ('default', 1, 'initial_schema'),
-  ('default', 2, 'add_users');
+**Check:** `mmmigrate apply -dry-run -namespace "$NAMESPACE"` must list only migrations you wrote after the port, which is none right after porting. If it lists one this database already has, stop: don't `apply`.
 
--- SQLite and MySQL: same statement against mmmigrate_applied
-```
-
-Generate the rows from the filenames rather than typing them, and cut the list off at the last migration the database actually has:
-
-```bash
-for f in migrations/[0-9]*.sql; do
-  b=$(basename "$f" .sql)
-  printf "  ('default', %d, '%s'),\n" "$((10#${b%%_*}))" "${b#*_}"
-done
-```
-
-Graphile's own record of what it applied is in `graphile_migrate.migrations` — compare against it before you decide where to stop. Anything you leave out stays pending and applies normally on the next `mmmigrate apply`.
-
-**Check:** `mmmigrate status` shows `✓` against every migration you inserted, and `mmmigrate apply -dry-run` reports nothing to do. Repeat for every database that already has the schema: production, staging, and each developer's local copy. A brand-new database needs none of this — `apply` builds it from nothing.
+Repeat for every database Graphile migrated: production, staging, and each developer's local copy. A brand-new database needs none of this, because `apply` builds it from nothing.
 
 ### 7. Re-set up shadow database
 
