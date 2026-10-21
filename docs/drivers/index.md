@@ -1,6 +1,6 @@
 # Drivers
 
-mmmigrate supports PostgreSQL, SQLite, and MySQL through pluggable drivers. Each driver is a separate Go module that implements the `mmmigrate.Dialect` interface (locking, tracking-table SQL, parameter style, reset SQL).
+mmmigrate supports PostgreSQL, SQLite, and MySQL through pluggable drivers. Each driver is a separate Go module that implements the `mmmigrate.Dialect` interface (locking, tracking-table SQL, parameter style, reset SQL). Changes to the tracking tables themselves are migrations in the root module's `selfmigrations/` package, one directory per SQL flavour, which each dialect returns from `SelfMigrations()`.
 
 ## Choosing a driver
 

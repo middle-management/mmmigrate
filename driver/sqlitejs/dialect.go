@@ -4,6 +4,12 @@
 // modernc.org/sqlite dependency, so it builds for any target.
 package sqlitejs
 
+import (
+	"io/fs"
+
+	"github.com/middle-management/mmmigrate/selfmigrations"
+)
+
 // Dialect implements mmmigrate.Dialect for SQLite via the jsdb bridge.
 type Dialect struct{}
 
@@ -20,14 +26,7 @@ func (Dialect) CreateMigrationsTable() string {
 		)`
 }
 
-func (Dialect) CreateCurrentTable() string {
-	return `
-		CREATE TABLE IF NOT EXISTS mmmigrate_current (
-			namespace   TEXT PRIMARY KEY,
-			checksum    TEXT NOT NULL,
-			applied_at  TEXT NOT NULL DEFAULT (datetime('now'))
-		)`
-}
+func (Dialect) SelfMigrations() fs.FS { return selfmigrations.SQLite }
 
 func (Dialect) SelectApplied() string {
 	return "SELECT version, name, applied_at FROM mmmigrate_applied WHERE namespace = ? ORDER BY version"

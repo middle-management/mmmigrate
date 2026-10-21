@@ -1,5 +1,7 @@
 package mmmigrate
 
+import "io/fs"
+
 // Dialect abstracts database-specific SQL syntax.
 //
 // Every tracking query is scoped to a namespace, which is always passed as the
@@ -7,8 +9,13 @@ package mmmigrate
 // in the same database.
 type Dialect interface {
 	DriverName() string
+	// CreateMigrationsTable creates the applied table if it doesn't exist. It
+	// must never change: every later change to the tracking tables is a
+	// migration in SelfMigrations, recorded in this table.
 	CreateMigrationsTable() string
-	CreateCurrentTable() string
+	// SelfMigrations returns the migrations for mmmigrate's own tracking
+	// tables (see package selfmigrations), rooted at the migration files.
+	SelfMigrations() fs.FS
 	// SelectApplied takes (namespace) and returns (version, name, applied_at) rows.
 	SelectApplied() string
 	// SelectCurrentChecksum takes (namespace) and returns a single checksum.

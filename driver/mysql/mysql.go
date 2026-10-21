@@ -1,7 +1,10 @@
 package mysql
 
 import (
+	"io/fs"
+
 	"github.com/middle-management/mmmigrate"
+	"github.com/middle-management/mmmigrate/selfmigrations"
 
 	_ "github.com/go-sql-driver/mysql"
 )
@@ -28,14 +31,7 @@ func (Dialect) CreateMigrationsTable() string {
 		)`
 }
 
-func (Dialect) CreateCurrentTable() string {
-	return `
-		CREATE TABLE IF NOT EXISTS mmmigrate_current (
-			namespace   VARCHAR(255) PRIMARY KEY,
-			checksum    VARCHAR(64) NOT NULL,
-			applied_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-		)`
-}
+func (Dialect) SelfMigrations() fs.FS { return selfmigrations.MySQL }
 
 func (Dialect) SelectApplied() string {
 	return "SELECT version, name, applied_at FROM mmmigrate_applied WHERE namespace = ? ORDER BY version"

@@ -4,6 +4,12 @@
 // GOOS=js GOARCH=wasm.
 package pglite
 
+import (
+	"io/fs"
+
+	"github.com/middle-management/mmmigrate/selfmigrations"
+)
+
 // Dialect implements mmmigrate.Dialect for pglite.
 //
 // pglite is real PostgreSQL, so the SQL is identical to the postgres driver
@@ -26,14 +32,7 @@ func (Dialect) CreateMigrationsTable() string {
 		)`
 }
 
-func (Dialect) CreateCurrentTable() string {
-	return `
-		CREATE TABLE IF NOT EXISTS mmmigrate.current (
-			namespace   TEXT PRIMARY KEY,
-			checksum    TEXT NOT NULL,
-			applied_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-		)`
-}
+func (Dialect) SelfMigrations() fs.FS { return selfmigrations.Postgres }
 
 func (Dialect) SelectApplied() string {
 	return "SELECT version, name, applied_at FROM mmmigrate.applied WHERE namespace = $1 ORDER BY version"

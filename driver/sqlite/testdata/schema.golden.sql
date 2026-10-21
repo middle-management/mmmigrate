@@ -9,6 +9,13 @@ CREATE TABLE mmmigrate_applied (
 			PRIMARY KEY (namespace, version)
 		);
 
+-- table: mmmigrate_current
+CREATE TABLE mmmigrate_current (
+	namespace   TEXT PRIMARY KEY,
+	checksum    TEXT NOT NULL,
+	applied_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- table: posts
 CREATE TABLE posts (
     id INTEGER PRIMARY KEY,

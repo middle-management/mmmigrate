@@ -6,6 +6,11 @@
   name varchar(255) NOT NULL
   applied_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
 
+-- table: mmmigrate_current
+  namespace varchar(255) NOT NULL
+  checksum varchar(64) NOT NULL
+  applied_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
+
 -- table: posts
   id int NOT NULL
   user_id int NOT NULL

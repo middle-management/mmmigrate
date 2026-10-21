@@ -1,6 +1,11 @@
 package postgres
 
-import _ "github.com/jackc/pgx/v5/stdlib"
+import (
+	"io/fs"
+
+	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/middle-management/mmmigrate/selfmigrations"
+)
 
 // Dialect implements migrate.Dialect for PostgreSQL.
 type Dialect struct{}
@@ -19,14 +24,7 @@ func (Dialect) CreateMigrationsTable() string {
 		)`
 }
 
-func (Dialect) CreateCurrentTable() string {
-	return `
-		CREATE TABLE IF NOT EXISTS mmmigrate.current (
-			namespace   TEXT PRIMARY KEY,
-			checksum    TEXT NOT NULL,
-			applied_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-		)`
-}
+func (Dialect) SelfMigrations() fs.FS { return selfmigrations.Postgres }
 
 func (Dialect) SelectApplied() string {
 	return "SELECT version, name, applied_at FROM mmmigrate.applied WHERE namespace = $1 ORDER BY version"
