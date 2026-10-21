@@ -136,42 +136,52 @@ func cmdCommit(args []string) {
 
 	absDir := resolveDir(*migrationsDir)
 
+	var db *sql.DB
 	if !*skipVerify {
-		db, cleanup := openDB(*databaseURL)
+		var cleanup func()
+		db, cleanup = openDB(*databaseURL)
 		defer cleanup()
-
-		ctx := context.Background()
-		fmt.Println("Testing migration against database...")
-		if err := mmmigrate.TestCurrentMigration(ctx, db, os.DirFS(absDir)); err != nil {
-			fatal("migration test failed: %v", err)
-		}
-		fmt.Println("✓ Migration test passed")
 	}
 
-	if err := source.CommitCurrentMigration(absDir, *description); err != nil {
+	shadow := *shadowURL
+	if shadow == "" {
+		shadow = os.Getenv("SHADOW_DATABASE_URL")
+	}
+
+	if err := commit(context.Background(), db, shadow, absDir, *description, *skipVerify, namespace()); err != nil {
 		fatal("%v", err)
 	}
+}
 
-	if !*skipVerify {
-		shadow := *shadowURL
-		if shadow == "" {
-			shadow = os.Getenv("SHADOW_DATABASE_URL")
+// commit verifies current.sql and then writes it out as the next numbered
+// migration. Every check runs before anything is written, so a failed
+// verification leaves the migrations directory untouched.
+func commit(ctx context.Context, db *sql.DB, shadowURL, absDir, description string, skipVerify bool, opts ...mmmigrate.Option) error {
+	if !skipVerify {
+		fmt.Println("Testing migration against database...")
+		if err := mmmigrate.TestCurrentMigration(ctx, db, os.DirFS(absDir)); err != nil {
+			return fmt.Errorf("migration test failed: %w", err)
 		}
-		if shadow != "" {
-			shadowDB, err := sql.Open(dialect.DriverName(), shadow)
+		fmt.Println("✓ Migration test passed")
+
+		// The replay applies the numbered migrations plus current.sql, which
+		// is the same SQL the committed file will hold.
+		if shadowURL != "" {
+			shadowDB, err := sql.Open(dialect.DriverName(), shadowURL)
 			if err != nil {
-				fatal("failed to open shadow database: %v", err)
+				return fmt.Errorf("failed to open shadow database: %w", err)
 			}
 			defer shadowDB.Close()
 
-			ctx := context.Background()
 			fmt.Println("Verifying full migration chain against shadow database...")
-			if err := mmmigrate.VerifyAgainstShadow(ctx, shadowDB, dialect, os.DirFS(absDir), namespace()); err != nil {
-				fatal("shadow verification failed: %v", err)
+			if err := mmmigrate.VerifyAgainstShadow(ctx, shadowDB, dialect, os.DirFS(absDir), opts...); err != nil {
+				return fmt.Errorf("shadow verification failed: %w", err)
 			}
 			fmt.Println("✓ Shadow database verification passed")
 		}
 	}
+
+	return source.CommitCurrentMigration(absDir, description)
 }
 
 func cmdRevert(args []string) {
