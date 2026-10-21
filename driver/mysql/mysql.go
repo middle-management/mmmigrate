@@ -3,6 +3,8 @@ package mysql
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
+	"errors"
 	"fmt"
 	"io/fs"
 	"strings"
@@ -76,7 +78,7 @@ var _ mmmigrate.Resetter = Dialect{}
 
 // Reset drops every view, table, stored procedure, stored function and event
 // in the current database. Triggers go with their tables.
-func (Dialect) Reset(ctx context.Context, conn *sql.Conn) error {
+func (Dialect) Reset(ctx context.Context, conn *sql.Conn) (err error) {
 	rows, err := conn.QueryContext(ctx, `
 		SELECT IF(table_type = 'VIEW', 'VIEW', 'TABLE') AS kind, table_name AS name
 			FROM information_schema.tables WHERE table_schema = DATABASE()
@@ -107,7 +109,15 @@ func (Dialect) Reset(ctx context.Context, conn *sql.Conn) error {
 	if _, err := conn.ExecContext(ctx, "SET FOREIGN_KEY_CHECKS = 0"); err != nil {
 		return err
 	}
-	defer conn.ExecContext(context.WithoutCancel(ctx), "SET FOREIGN_KEY_CHECKS = 1")
+	defer func() {
+		// Restore the checks even if a drop failed or ctx was cancelled. If
+		// that fails, discard the connection rather than let a session with
+		// checks off back into the pool, where the replay would use it.
+		if _, rerr := conn.ExecContext(context.WithoutCancel(ctx), "SET FOREIGN_KEY_CHECKS = 1"); rerr != nil {
+			conn.Raw(func(any) error { return driver.ErrBadConn })
+			err = errors.Join(err, fmt.Errorf("restore foreign key checks: %w", rerr))
+		}
+	}()
 
 	for _, q := range drops {
 		if _, err := conn.ExecContext(ctx, q); err != nil {
