@@ -71,8 +71,8 @@ It's waiting on the [concurrency lock](concurrency.md). Another mmmigrate proces
 
 The CI matrix runs against:
 
-- PostgreSQL 17 (older versions work; advisory locks have been stable forever).
-- MySQL 8.
+- PostgreSQL 14, 15, 16, 17 and 18: every major version still supported upstream.
+- MySQL 8.4 and 9.7 (the LTS lines) and the current innovation release.
 - SQLite via `modernc.org/sqlite` (latest).
 
 See [`.github/workflows/ci.yml`](https://github.com/middle-management/mmmigrate/blob/main/.github/workflows/ci.yml) for the canonical matrix.
