@@ -66,7 +66,9 @@ func (Dialect) ResetSQL() string {
 				SELECT nspname FROM pg_namespace
 				WHERE nspname NOT LIKE 'pg\_%' AND nspname <> 'information_schema'
 			) LOOP
-				EXECUTE 'DROP SCHEMA ' || quote_ident(r.nspname) || ' CASCADE';
+				-- IF EXISTS: an earlier CASCADE may already have dropped it, e.g.
+				-- a schema owned by an extension in another schema.
+				EXECUTE 'DROP SCHEMA IF EXISTS ' || quote_ident(r.nspname) || ' CASCADE';
 			END LOOP;
 		END $$;
 		CREATE SCHEMA public;

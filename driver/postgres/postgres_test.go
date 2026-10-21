@@ -59,7 +59,7 @@ func TestPostgresShadowReset(t *testing.T) {
 		t.Fatal(err)
 	}
 	cleanup := func() {
-		db.Exec("DROP SCHEMA IF EXISTS mmmigrate, app CASCADE")
+		db.Exec("DROP SCHEMA IF EXISTS mmmigrate, app, ext_a, ext_b CASCADE")
 		db.Exec("DROP VIEW IF EXISTS public.leftover_view")
 		db.Exec("DROP FUNCTION IF EXISTS public.leftover_func()")
 		db.Exec("DROP TYPE IF EXISTS public.leftover_type")
@@ -76,6 +76,12 @@ func TestPostgresShadowReset(t *testing.T) {
 		"CREATE FUNCTION public.leftover_func() RETURNS int LANGUAGE sql AS 'SELECT 1'",
 		"CREATE TYPE public.leftover_type AS ENUM ('a')",
 		"CREATE SEQUENCE public.leftover_seq",
+		// An extension that owns a second schema: dropping ext_a cascades to
+		// ext_b, which the reset must then skip rather than fail on.
+		"CREATE SCHEMA ext_a",
+		"CREATE SCHEMA ext_b",
+		"CREATE EXTENSION citext SCHEMA ext_a",
+		"ALTER EXTENSION citext ADD SCHEMA ext_b",
 	} {
 		if _, err := db.Exec(q); err != nil {
 			t.Fatalf("%s: %v", q, err)
@@ -90,8 +96,11 @@ func TestPostgresShadowReset(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	if err := mmmigrate.VerifyAgainstShadow(ctx, db, postgres.Dialect{}, os.DirFS(dir)); err == nil {
+	err = mmmigrate.VerifyAgainstShadow(ctx, db, postgres.Dialect{}, os.DirFS(dir))
+	if err == nil {
 		t.Error("shadow verification passed a migration that fails on a fresh database")
+	} else if !strings.Contains(err.Error(), "shadow replay failed") {
+		t.Errorf("expected the replay to fail, not the reset: %v", err)
 	}
 
 	var leftovers []string
