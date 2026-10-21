@@ -54,14 +54,21 @@ func (Dialect) UpsertCurrent() string {
 func (Dialect) Lock() string   { return "SELECT pg_advisory_lock(1833701705, hashtext($1))" }
 func (Dialect) Unlock() string { return "SELECT pg_advisory_unlock(1833701705, hashtext($1))" }
 
+// ResetSQL drops every non-system schema, with everything in it, and
+// recreates an empty public schema. Schemas named pg_* are reserved for the
+// system (catalog, TOAST and temp schemas).
 func (Dialect) ResetSQL() string {
 	return `
-		DROP SCHEMA IF EXISTS mmmigrate CASCADE;
 		DO $$ DECLARE
 			r RECORD;
 		BEGIN
-			FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public') LOOP
-				EXECUTE 'DROP TABLE IF EXISTS public.' || quote_ident(r.tablename) || ' CASCADE';
+			FOR r IN (
+				SELECT nspname FROM pg_namespace
+				WHERE nspname NOT LIKE 'pg\_%' AND nspname <> 'information_schema'
+			) LOOP
+				EXECUTE 'DROP SCHEMA ' || quote_ident(r.nspname) || ' CASCADE';
 			END LOOP;
-		END $$`
+		END $$;
+		CREATE SCHEMA public;
+		GRANT USAGE ON SCHEMA public TO PUBLIC`
 }
