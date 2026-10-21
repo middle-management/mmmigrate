@@ -22,6 +22,7 @@ func cmdWatch(args []string) {
 	databaseURL := fs.String("database-url", "", "Database connection URL (defaults to DATABASE_URL env var)")
 	migrationsDir := fs.String("migrations", "migrations", "Path to migrations directory")
 	debounce := fs.Duration("debounce", 200*time.Millisecond, "Debounce window for file change events")
+	namespace := namespaceFlag(fs)
 	fs.Parse(args)
 
 	absDir := resolveDir(*migrationsDir)
@@ -31,12 +32,12 @@ func cmdWatch(args []string) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := runWatch(ctx, db, absDir, *debounce); err != nil && !errors.Is(err, context.Canceled) {
+	if err := runWatch(ctx, db, absDir, *debounce, namespace()); err != nil && !errors.Is(err, context.Canceled) {
 		fatal("%v", err)
 	}
 }
 
-func runWatch(ctx context.Context, db *sql.DB, absDir string, debounce time.Duration) error {
+func runWatch(ctx context.Context, db *sql.DB, absDir string, debounce time.Duration, opts ...mmmigrate.Option) error {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return fmt.Errorf("failed to create file watcher: %w", err)
@@ -58,7 +59,7 @@ func runWatch(ctx context.Context, db *sql.DB, absDir string, debounce time.Dura
 		absDir, len(paths)-1, debounce)
 
 	apply := func() {
-		if err := mmmigrate.RunMigrations(ctx, db, dialect, os.DirFS(absDir), true); err != nil {
+		if err := mmmigrate.RunMigrations(ctx, db, dialect, os.DirFS(absDir), true, opts...); err != nil {
 			fmt.Fprintf(os.Stderr, "[%s] Error: %v\n", time.Now().Format("15:04:05"), err)
 		} else {
 			fmt.Printf("[%s] ✓ applied\n", time.Now().Format("15:04:05"))

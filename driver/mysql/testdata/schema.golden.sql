@@ -1,6 +1,7 @@
 -- server: 8.4.8
 
 -- table: mmmigrate_applied
+  namespace varchar(255) NOT NULL
   version int NOT NULL
   name varchar(255) NOT NULL
   applied_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP

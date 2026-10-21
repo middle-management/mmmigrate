@@ -4,9 +4,11 @@ mmmigrate is designed for environments where multiple processes — for example,
 
 | Dialect | Lock mechanism |
 |---------|----------------|
-| PostgreSQL | `pg_advisory_lock` (advisory lock keyed to a fixed integer) |
-| MySQL | `GET_LOCK('mmmigrate', -1)` (named lock, blocking wait) |
+| PostgreSQL | `pg_advisory_lock(1833701705, hashtext('<namespace>'))` (advisory lock keyed to a fixed integer plus a hash of the namespace) |
+| MySQL | `GET_LOCK(CONCAT('mmmigrate:', LEFT(SHA2('<namespace>', 256), 40)), -1)` (named lock, blocking wait) |
 | SQLite | Native file-level locking via the `sqlite3` driver |
+
+Locks are per [namespace](namespaces.md). Applies in the same namespace serialize; applies in different namespaces (say, two apps sharing a database) don't block each other. SQLite is the exception: file-level locking can't tell namespaces apart, so those applies still take turns.
 
 ## How it works in practice
 

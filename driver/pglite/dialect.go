@@ -18,39 +18,40 @@ func (Dialect) CreateMigrationsTable() string {
 	return `
 		CREATE SCHEMA IF NOT EXISTS mmmigrate;
 		CREATE TABLE IF NOT EXISTS mmmigrate.applied (
-			version     INTEGER PRIMARY KEY,
+			namespace   TEXT NOT NULL,
+			version     INTEGER NOT NULL,
 			name        TEXT NOT NULL,
-			applied_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+			applied_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+			PRIMARY KEY (namespace, version)
 		)`
 }
 
 func (Dialect) CreateCurrentTable() string {
 	return `
 		CREATE TABLE IF NOT EXISTS mmmigrate.current (
-			id          INTEGER PRIMARY KEY DEFAULT 1,
+			namespace   TEXT PRIMARY KEY,
 			checksum    TEXT NOT NULL,
-			applied_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-			CONSTRAINT  current_single_row CHECK (id = 1)
+			applied_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 		)`
 }
 
 func (Dialect) SelectApplied() string {
-	return "SELECT version, name, applied_at FROM mmmigrate.applied ORDER BY version"
+	return "SELECT version, name, applied_at FROM mmmigrate.applied WHERE namespace = $1 ORDER BY version"
 }
 
 func (Dialect) SelectCurrentChecksum() string {
-	return "SELECT checksum FROM mmmigrate.current WHERE id = 1"
+	return "SELECT checksum FROM mmmigrate.current WHERE namespace = $1"
 }
 
 func (Dialect) InsertApplied() string {
-	return "INSERT INTO mmmigrate.applied (version, name, applied_at) VALUES ($1, $2, now())"
+	return "INSERT INTO mmmigrate.applied (namespace, version, name, applied_at) VALUES ($1, $2, $3, now())"
 }
 
 func (Dialect) UpsertCurrent() string {
 	return `
-		INSERT INTO mmmigrate.current (id, checksum, applied_at)
-		VALUES (1, $1, now())
-		ON CONFLICT (id) DO UPDATE SET
+		INSERT INTO mmmigrate.current (namespace, checksum, applied_at)
+		VALUES ($1, $2, now())
+		ON CONFLICT (namespace) DO UPDATE SET
 			checksum = EXCLUDED.checksum,
 			applied_at = EXCLUDED.applied_at`
 }

@@ -63,23 +63,34 @@ mmmigrate.RunMigrations(ctx, db, postgres.Dialect{}, sub, false)
 
 | Function | Purpose |
 |----------|---------|
-| `mmmigrate.RunMigrations(ctx, db, dialect, fsys, applyCurrent)` | Equivalent to the CLI's `apply` command |
-| `mmmigrate.Status(ctx, db, dialect, fsys)` | Returns applied/pending state for each migration |
-| `mmmigrate.DryRun(ctx, db, dialect, fsys, applyCurrent)` | Returns the SQL that would run, without executing |
+| `mmmigrate.RunMigrations(ctx, db, dialect, fsys, applyCurrent, opts...)` | Equivalent to the CLI's `apply` command |
+| `mmmigrate.Status(ctx, db, dialect, fsys, opts...)` | Returns applied/pending state for each migration |
+| `mmmigrate.DryRun(ctx, db, dialect, fsys, applyCurrent, opts...)` | Returns the SQL that would run, without executing |
 | `mmmigrate.TestCurrentMigration(ctx, db, fsys)` | Runs `current.sql` in a rolled-back transaction (used by `commit`) |
-| `mmmigrate.VerifyAgainstShadow(ctx, shadowDB, dialect, fsys)` | Resets and replays the chain on a shadow DB |
+| `mmmigrate.VerifyAgainstShadow(ctx, shadowDB, dialect, fsys, opts...)` | Resets and replays the chain on a shadow DB |
 
-`fsys` is an `io/fs.FS` rooted at the migrations directory.
+`fsys` is an `io/fs.FS` rooted at the migrations directory. `opts` are optional `mmmigrate.Option`s; currently `mmmigrate.WithNamespace`.
 
 For lower-level control, construct a `Migrator` directly:
 
 ```go
 fsys := os.DirFS("migrations")
-m := mmmigrate.NewMigrator(db, postgres.Dialect{}, fsys, false)
+m := mmmigrate.NewMigrator(db, postgres.Dialect{}, fsys, false) // also takes opts..., e.g. WithNamespace
 migrations, err := source.LoadMigrations(fsys, false)
 if err != nil { /* ... */ }
 if err := m.Run(ctx, migrations); err != nil { /* ... */ }
 ```
+
+## Namespaces
+
+To keep several independent migration histories in one database (for example, several apps sharing it), pass `WithNamespace`. Without it, the namespace is `mmmigrate.DefaultNamespace` (`"default"`); an empty string also means the default.
+
+```go
+err := mmmigrate.RunMigrations(ctx, db, postgres.Dialect{}, fsys, false,
+    mmmigrate.WithNamespace("billing"))
+```
+
+Pass the same namespace to every call for a given app. See [Namespaces](namespaces.md) for the caveats.
 
 ## Choosing a dialect
 

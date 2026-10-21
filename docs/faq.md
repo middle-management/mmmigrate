@@ -44,10 +44,10 @@ If you really need data that's part of the schema (like enum lookup rows), use `
 mmmigrate works out what to run purely from its tracking table, which starts empty, so a plain `apply` against a database built by another tool (or restored from a snapshot) fails trying to re-create what is already there. Tell it those migrations are done: run `mmmigrate status` once to create the tracking table, then insert a row per migration the database already has.
 
 ```sql
-INSERT INTO mmmigrate.applied (version, name) VALUES (1, 'initial_schema');
+INSERT INTO mmmigrate.applied (namespace, version, name) VALUES ('default', 1, 'initial_schema');
 ```
 
-`applied_at` defaults, and only `version` is matched against the files. Use `mmmigrate_applied` on SQLite and MySQL. [Migrating from Graphile Migrate](migrating-from-graphile.md#6-record-existing-migrations-as-applied) walks through it with a script to generate the rows.
+`applied_at` defaults, and only `version` is matched against the files, within the namespace mmmigrate runs with. `namespace` has no default, so always give it: `'default'`, or your own namespace if you set one. Use `mmmigrate_applied` on SQLite and MySQL. [Migrating from Graphile Migrate](migrating-from-graphile.md#6-record-existing-migrations-as-applied) walks through it with a script to generate the rows.
 
 ## Can I have multiple `current.sql` files?
 
@@ -85,8 +85,27 @@ See [`.github/workflows/ci.yml`](https://github.com/middle-management/mmmigrate/
 | SQLite | Tables `mmmigrate_applied` and `mmmigrate_current` |
 | MySQL | Tables `mmmigrate_applied` and `mmmigrate_current` |
 
+Both tables have a `namespace` column (`default` unless you set one), so one database can hold several apps' histories. `applied` has one row per `(namespace, version)`; `current` has one row per namespace.
+
 If you need to inspect what mmmigrate thinks it's applied, query those directly.
+
+## Can several apps share one database?
+
+Yes. Give each app its own [namespace](namespaces.md), and each gets an independent migration history and its own lock:
+
+```bash
+export MMMIGRATE_NAMESPACE=billing    # or pass -namespace billing
+mmmigrate apply
+```
+
+Things to watch:
+
+- Namespaces only separate mmmigrate's bookkeeping. The apps' own tables still share the database, so they must not collide (on PostgreSQL, give each app its own schema in its migrations).
+- Use a separate shadow database per app. Shadow verification wipes the whole shadow database.
+- Use the same namespace for every command (`apply`, `status`, `watch`, `commit`) for a given app.
+
+See [Namespaces](namespaces.md) for details.
 
 ## Can I run mmmigrate as a library inside my Go service?
 
-Yes — see [Library API](library.md). `mmmigrate.RunMigrations(ctx, db, dialect, "migrations", false)` on app startup is a common pattern.
+Yes — see [Library API](library.md). `mmmigrate.RunMigrations(ctx, db, dialect, os.DirFS("migrations"), false)` on app startup is a common pattern.

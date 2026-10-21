@@ -47,7 +47,7 @@ edit current.sql → apply -current (dev, iterate) → commit → apply (prod)
 
 *`commit` skips the DB test when `-skip-verify` is set. `-shadow-url` (or `SHADOW_DATABASE_URL`) additionally replays the full chain on a disposable database — required for MySQL DDL.
 
-All commands accept `-migrations DIR` (default: `migrations`). DB commands accept `-database-url URL` (default: `DATABASE_URL` env).
+All commands accept `-migrations DIR` (default: `migrations`). DB commands accept `-database-url URL` (default: `DATABASE_URL` env). `apply`, `status`, `commit` and `watch` also accept `-namespace NAME` (default: `MMMIGRATE_NAMESPACE` env, then `default`) for several apps sharing one database.
 
 ## Committed Migration Format
 
@@ -88,7 +88,7 @@ import (
 )
 
 // Use the dialect explicitly:
-// mmmigrate.RunMigrations(ctx, db, postgres.Dialect{}, "migrations", false)
+// mmmigrate.RunMigrations(ctx, db, postgres.Dialect{}, os.DirFS("migrations"), false)
 ```
 
 ## Integrity
@@ -102,6 +102,8 @@ import (
 
 - **PostgreSQL**: `mmmigrate.applied`, `mmmigrate.current` (own schema)
 - **SQLite/MySQL**: `mmmigrate_applied`, `mmmigrate_current`
+
+Both tables have a `namespace` column (`default` unless `-namespace` / `MMMIGRATE_NAMESPACE` is set); `namespace` has no default, so include it in manual INSERTs. Library: `mmmigrate.WithNamespace("name")`. Each app sharing a database needs its own namespace and its own shadow database; use the same namespace for every command.
 
 ## MySQL Limitations
 

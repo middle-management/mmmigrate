@@ -1,10 +1,11 @@
 -- table: mmmigrate.applied
+  namespace text NOT NULL
   version integer NOT NULL
   name text NOT NULL
   applied_at timestamp with time zone NOT NULL DEFAULT now()
 
 -- table: mmmigrate.current
-  id integer NOT NULL DEFAULT 1
+  namespace text NOT NULL
   checksum text NOT NULL
   applied_at timestamp with time zone NOT NULL DEFAULT now()
 

@@ -2,14 +2,16 @@
 
 -- table: mmmigrate_applied
 CREATE TABLE mmmigrate_applied (
-			version     INTEGER PRIMARY KEY,
+			namespace   TEXT NOT NULL,
+			version     INTEGER NOT NULL,
 			name        TEXT NOT NULL,
-			applied_at  TEXT NOT NULL DEFAULT (datetime('now'))
+			applied_at  TEXT NOT NULL DEFAULT (datetime('now')),
+			PRIMARY KEY (namespace, version)
 		);
 
 -- table: mmmigrate_current
 CREATE TABLE mmmigrate_current (
-			id          INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+			namespace   TEXT PRIMARY KEY,
 			checksum    TEXT NOT NULL,
 			applied_at  TEXT NOT NULL DEFAULT (datetime('now'))
 		);
