@@ -27,7 +27,7 @@ Create a dedicated database for shadow use. It will be **fully wiped** on every 
 
 === "SQLite"
 
-    Just use a temp file or `:memory:`.
+    Just use a temp file, or `:memory:` when you don't use a [baseline](#objects-owned-by-another-app).
 
 !!! danger "The shadow database is wiped on every run"
     `mmmigrate commit -shadow-url ...` resets the entire shadow database before replaying the migration chain. Never aim it at a database that contains data you want to keep.
@@ -91,8 +91,9 @@ The reset empties the whole shadow database, so a chain that depends on objects 
     ```
 
 - **Repeatable.** Pass `-shadow-baseline` more than once, or separate paths in `MMMIGRATE_SHADOW_BASELINE` like `PATH` (`:` on Unix, `;` on Windows). Files load in the order given.
-- **Plain SQL.** A baseline is run as one script, without `@include` processing, so the path can be anywhere, including outside the migrations directory.
-- **Session settings don't leak.** Each baseline load runs on its own connection, which is then closed, so settings a dump makes (pg_dump empties `search_path`) don't reach the replay.
+- **Plain SQL.** A baseline is run as one script, without `@include` processing, so the path can be anywhere, including outside the migrations directory. The `\restrict` and `\unrestrict` lines that recent `pg_dump` versions add are psql commands, not SQL, so mmmigrate drops them. Other psql backslash commands aren't supported.
+- **Use a `pg_dump` no newer than the shadow's server.** A newer `pg_dump` can emit settings an older server rejects, such as `SET transaction_timeout` from PostgreSQL 17 onwards.
+- **Session settings don't leak.** Each baseline load runs on its own connection, which is then closed, so settings a dump makes (pg_dump empties `search_path`) don't reach the replay. Closing that connection also ends a SQLite `:memory:` database along with the baseline's tables, so with a baseline, give SQLite a file-backed shadow.
 - **Roles live outside the database.** On PostgreSQL, roles belong to the server, not the shadow database, so the reset doesn't drop them and a baseline doesn't need to create them. Grants in your migrations, or owners and grants in a dump, need those roles to exist on the shadow's server. `--no-owner --no-privileges` keeps a dump free of them.
 - **Keep it current.** The baseline stands in for what the deployed database holds before your migrations run. Regenerate it when the other app's schema changes.
 

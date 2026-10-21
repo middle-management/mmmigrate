@@ -172,6 +172,44 @@ func TestPostgresShadowBaselineSessionState(t *testing.T) {
 	}
 }
 
+// TestPostgresShadowBaselineFromPgDump loads real `pg_dump --schema-only`
+// output as a baseline. Plain dumps carry psql-only \restrict/\unrestrict
+// lines and reset search_path, and both must not break the replay. The
+// fixture comes from pg_dump 14, the oldest supported version, whose output
+// newer servers also accept.
+func TestPostgresShadowBaselineFromPgDump(t *testing.T) {
+	dsn := os.Getenv("MMMIGRATE_TEST_POSTGRES_URL")
+	if dsn == "" {
+		t.Skip("set MMMIGRATE_TEST_POSTGRES_URL to run postgres integration tests")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanup := func() {
+		db.Exec("DROP SCHEMA IF EXISTS mmmigrate, studio CASCADE")
+		db.Exec("DROP TABLE IF EXISTS public.membership_cache")
+	}
+	cleanup()
+	t.Cleanup(func() { cleanup(); db.Close() })
+
+	dump, err := os.ReadFile(filepath.Join("testdata", "studio_pg_dump.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "001_membership_cache.sql"),
+		[]byte(`CREATE TABLE membership_cache (user_id uuid REFERENCES studio."user" (id));`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	err = mmmigrate.VerifyAgainstShadow(context.Background(), db, postgres.Dialect{}, os.DirFS(dir),
+		mmmigrate.WithShadowBaseline(string(dump)))
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func dumpPostgresSchema(t *testing.T, db *sql.DB) string {
 	t.Helper()
 

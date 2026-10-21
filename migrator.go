@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -469,6 +470,11 @@ func resetShadow(ctx context.Context, shadowDB *sql.DB, dialect Dialect) error {
 	return err
 }
 
+// psqlRestrictLine matches the \restrict and \unrestrict lines that pg_dump
+// adds to plain-text dumps. They are psql meta-commands, not SQL, so a
+// baseline taken from pg_dump would otherwise fail to run.
+var psqlRestrictLine = regexp.MustCompile(`(?m)^\\(?:un)?restrict(?:[ \t].*)?$`)
+
 // loadBaselines runs the baseline SQL on a dedicated connection and then
 // discards it. Baselines are often pg_dump output, which changes session
 // settings such as search_path; a discarded connection can't carry them into
@@ -482,6 +488,7 @@ func loadBaselines(ctx context.Context, shadowDB *sql.DB, baselines []string) er
 	defer conn.Raw(func(any) error { return driver.ErrBadConn })
 
 	for i, q := range baselines {
+		q = psqlRestrictLine.ReplaceAllString(q, "")
 		if _, err := conn.ExecContext(ctx, q); err != nil {
 			return fmt.Errorf("baseline %d: %w", i+1, err)
 		}
