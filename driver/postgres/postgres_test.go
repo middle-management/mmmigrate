@@ -133,6 +133,45 @@ func TestPostgresShadowReset(t *testing.T) {
 	}
 }
 
+// TestPostgresShadowBaselineSessionState checks that session settings made by
+// a baseline don't reach the replay. pg_dump output empties search_path for
+// its session; if that leaked, unqualified names in the migrations would stop
+// resolving.
+func TestPostgresShadowBaselineSessionState(t *testing.T) {
+	dsn := os.Getenv("MMMIGRATE_TEST_POSTGRES_URL")
+	if dsn == "" {
+		t.Skip("set MMMIGRATE_TEST_POSTGRES_URL to run postgres integration tests")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		db.Exec("DROP SCHEMA IF EXISTS mmmigrate, studio CASCADE")
+		db.Exec("DROP TABLE IF EXISTS public.accounts_cache")
+		db.Close()
+	})
+
+	// Shaped like pg_dump --schema-only output for another app's schema.
+	baseline := `
+		SELECT pg_catalog.set_config('search_path', '', false);
+		CREATE SCHEMA studio;
+		CREATE TABLE studio."user" (id int PRIMARY KEY);`
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "001_accounts_cache.sql"),
+		[]byte(`CREATE TABLE accounts_cache (user_id int REFERENCES studio."user" (id));`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	err = mmmigrate.VerifyAgainstShadow(ctx, db, postgres.Dialect{}, os.DirFS(dir),
+		mmmigrate.WithShadowBaseline(baseline))
+	if err != nil {
+		t.Fatalf("shadow verification with baseline failed: %v", err)
+	}
+}
+
 func dumpPostgresSchema(t *testing.T, db *sql.DB) string {
 	t.Helper()
 

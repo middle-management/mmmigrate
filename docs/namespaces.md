@@ -37,6 +37,6 @@ Both [tracking tables](faq.md#where-is-the-tracking-table) have a `namespace` co
 ## Caveats
 
 - **`_mmmigrate` is reserved.** mmmigrate records the migrations of its own tracking tables under it, and rejects it as an app's namespace.
-- **Only bookkeeping is separated.** The apps' own objects still share the database, so migrations must not create conflicting tables. On PostgreSQL, have each app create its objects in its own schema.
+- **Only bookkeeping is separated.** The apps' own objects still share the database, so migrations must not create conflicting tables. On PostgreSQL, have each app create its objects in its own schema. When one app's migrations reference another app's objects (a foreign key or a grant across schemas), load the other app's schema into the shadow with [`-shadow-baseline`](shadow-database.md#objects-owned-by-another-app), since the shadow reset removes it.
 - **Use a separate shadow database per app.** <a id="shadow-databases"></a>Shadow verification resets the whole shadow database before replaying: on PostgreSQL it drops every non-system schema, `public` included, with everything in it; on MySQL and SQLite it drops all tables. Never point two apps' `-shadow-url` at the same shadow database at the same time, and never at a real database. See [Shadow database](shadow-database.md).
 - **`namespace` has no default in SQL.** Manual inserts into the tracking table must include it, e.g. `INSERT INTO mmmigrate.applied (namespace, version, name) VALUES ('billing', 1, 'initial_schema');`.

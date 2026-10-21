@@ -203,6 +203,7 @@ func Run(t *testing.T, h Harness) {
 	t.Run("ConcurrentApply", func(t *testing.T) { testConcurrentApply(t, h) })
 	t.Run("SingleConnectionPool", func(t *testing.T) { testSingleConnectionPool(t, h) })
 	t.Run("SelfMigrations", func(t *testing.T) { testSelfMigrations(t, h) })
+	t.Run("ShadowBaseline", func(t *testing.T) { testShadowBaseline(t, h) })
 }
 
 // testSchema runs the fixture migrations (without current.sql) and compares
@@ -675,6 +676,37 @@ func testSelfMigrations(t *testing.T, h Harness) {
 	}
 	if n := appliedCount(t, db, h); n != 3 {
 		t.Errorf("expected 3 applied migrations, got %d", n)
+	}
+}
+
+// testShadowBaseline checks that a baseline loaded after the shadow reset
+// supplies objects the migrations depend on but don't create, and that it
+// isn't recorded as an applied migration.
+func testShadowBaseline(t *testing.T, h Harness) {
+	shadowDB := h.OpenDB(t)
+	t.Cleanup(func() { shadowDB.Exec("DROP TABLE IF EXISTS baseline_owned") })
+
+	dir := t.TempDir()
+	writeSQL(t, dir, "001_use_baseline.sql", `INSERT INTO baseline_owned (id) VALUES (1);`)
+	fsys := os.DirFS(dir)
+
+	ctx := context.Background()
+	d := h.Dialect(t)
+
+	if err := mmmigrate.VerifyAgainstShadow(ctx, shadowDB, d, fsys); err == nil {
+		t.Fatal("shadow verification passed without the baseline the migration needs")
+	}
+
+	baseline := mmmigrate.WithShadowBaseline(`CREATE TABLE baseline_owned (id INTEGER PRIMARY KEY);`)
+	if err := mmmigrate.VerifyAgainstShadow(ctx, shadowDB, d, fsys, baseline); err != nil {
+		t.Fatalf("shadow verification with baseline failed: %v", err)
+	}
+
+	if n := rowCount(t, shadowDB, "baseline_owned"); n != 1 {
+		t.Errorf("expected the migration's row in baseline_owned, got %d rows", n)
+	}
+	if n := appliedCount(t, shadowDB, h); n != 1 {
+		t.Errorf("expected only the migration recorded as applied, got %d", n)
 	}
 }
 

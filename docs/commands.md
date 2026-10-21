@@ -48,6 +48,7 @@ With `-dry-run`, mmmigrate prints the SQL it would execute without committing an
 ```bash
 mmmigrate commit -description "add events table"
 mmmigrate commit -description "..." -shadow-url "postgres://localhost/myapp_shadow"
+mmmigrate commit -description "..." -shadow-url "..." -shadow-baseline other-app-schema.sql
 mmmigrate commit -description "..." -skip-verify
 ```
 
@@ -63,6 +64,8 @@ Tests `current.sql` against the database, then writes a numbered migration file:
 `-skip-verify` skips both the dry-run and the shadow check. Use sparingly — it lets you commit SQL that has never been executed against any database.
 
 `SHADOW_DATABASE_URL` is honored when `-shadow-url` is not passed.
+
+`-shadow-baseline PATH` (repeatable, or `MMMIGRATE_SHADOW_BASELINE`) loads SQL into the shadow database after the reset and before the replay, for objects your migrations depend on but don't create, such as another app's schema. See [Shadow database](shadow-database.md#objects-owned-by-another-app).
 
 `-namespace` selects the migration history used for the shadow replay. Use the same namespace as for `apply`, and give each app its own shadow database — see [Namespaces](namespaces.md#shadow-databases).
 

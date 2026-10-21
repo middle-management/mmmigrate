@@ -3,6 +3,7 @@ package sqlite_test
 import (
 	"database/sql"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -16,7 +17,9 @@ func TestSQLite(t *testing.T) {
 	migratetest.Run(t, migratetest.Harness{
 		OpenDB: func(t *testing.T) *sql.DB {
 			t.Helper()
-			db, err := sql.Open("sqlite", ":memory:")
+			// A file rather than :memory:, where each pooled connection
+			// would see its own empty database.
+			db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "test.db"))
 			if err != nil {
 				t.Fatal(err)
 			}
