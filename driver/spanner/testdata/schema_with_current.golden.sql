@@ -21,6 +21,7 @@
   version bigint NOT NULL
   done bigint NOT NULL
   prefix character varying NOT NULL
+  fails character varying NOT NULL DEFAULT ''::text
   updated_at timestamp with time zone NOT NULL
 
 -- table: public.posts

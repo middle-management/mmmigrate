@@ -94,6 +94,7 @@ func (Dialect) CreateMigrationsTable() string {
 			version     bigint NOT NULL,
 			done        bigint NOT NULL,
 			prefix      varchar NOT NULL,
+			fails       varchar NOT NULL DEFAULT '',
 			updated_at  timestamptz NOT NULL,
 			PRIMARY KEY (namespace, version)
 		)`
@@ -394,16 +395,23 @@ func (d Dialect) ApplyMigration(ctx context.Context, conn *sql.Conn, namespace s
 	units := plan(script)
 
 	var done int
-	var prefix string
+	var prefix, failsList string
 	err := conn.QueryRowContext(ctx,
-		`SELECT done, prefix FROM mmmigrate_progress WHERE namespace = $1 AND version = $2`,
-		namespace, version).Scan(&done, &prefix)
+		`SELECT done, prefix, fails FROM mmmigrate_progress WHERE namespace = $1 AND version = $2`,
+		namespace, version).Scan(&done, &prefix, &failsList)
 	resuming := err == nil
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
+		// Which statements would fail as written now, before any runs:
+		// recovery must run those as written (precheck.go).
+		fails, err := failsAsWritten(ctx, conn, statements(units))
+		if err != nil {
+			return fmt.Errorf("check statements against the schema: %w", err)
+		}
+		failsList = formatInts(fails)
 		if _, err := conn.ExecContext(ctx,
-			`INSERT INTO mmmigrate_progress (namespace, version, done, prefix, updated_at) VALUES ($1, $2, 0, $3, CURRENT_TIMESTAMP)`,
-			namespace, version, prefixHash(units[:0])); err != nil {
+			`INSERT INTO mmmigrate_progress (namespace, version, done, prefix, fails, updated_at) VALUES ($1, $2, 0, $3, $4, CURRENT_TIMESTAMP)`,
+			namespace, version, prefixHash(units[:0]), failsList); err != nil {
 			return fmt.Errorf("record progress: %w", err)
 		}
 	case err != nil:
@@ -417,7 +425,11 @@ func (d Dialect) ApplyMigration(ctx context.Context, conn *sql.Conn, namespace s
 		slog.Info("resuming partly applied migration", "namespace", namespace, "version", version, "name", name, "done", done, "of", len(units))
 	}
 
+	asWritten := parseInts(failsList)
+	first := 0 // index of u's first statement in the migration
 	for i, u := range units {
+		offset := first
+		first += len(u.stmts)
 		if i < done {
 			if u.kind == kindSession {
 				// Session settings don't survive the run that made them.
@@ -434,7 +446,13 @@ func (d Dialect) ApplyMigration(ctx context.Context, conn *sql.Conn, namespace s
 			}
 			continue
 		}
-		if err := d.runUnit(ctx, conn, u, recover); err != nil {
+		var err error
+		if recover {
+			err = d.recoverUnit(ctx, conn, u, offset, asWritten)
+		} else {
+			err = d.runUnit(ctx, conn, u, false)
+		}
+		if err != nil {
 			if recover {
 				return fmt.Errorf("%w (re-running a statement group an earlier run may have applied; "+
 					"once the database reflects every statement of it, mark it done: "+
@@ -517,17 +535,40 @@ func (d Dialect) runUnit(ctx context.Context, conn *sql.Conn, u unit, recover bo
 		return nil
 	}
 	if recover {
-		if err := recoveryConflict(u.stmts); err != nil {
-			return err
-		}
-		for _, q := range u.stmts {
-			if err := d.runDDL(ctx, conn, []string{idempotent(q)}); err != nil {
-				return err
-			}
-		}
-		return nil
+		return d.recoverUnit(ctx, conn, u, 0, nil)
 	}
 	return d.runDDL(ctx, conn, u.stmts)
+}
+
+// recoverUnit re-runs a DDL group an earlier run may have applied, a
+// statement at a time, each in its idempotent form unless asWritten (keyed by
+// the statement's index in the migration, the group's first being offset)
+// says it would have failed as written when the migration began: such a
+// statement must fail again, not pass as already done.
+func (d Dialect) recoverUnit(ctx context.Context, conn *sql.Conn, u unit, offset int, asWritten map[int]bool) error {
+	if u.kind != kindDDL {
+		return d.runUnit(ctx, conn, u, false)
+	}
+	if err := recoveryConflict(u.stmts); err != nil {
+		return err
+	}
+	for j, q := range u.stmts {
+		if !asWritten[offset+j] {
+			q = idempotent(q)
+		}
+		if err := d.runDDL(ctx, conn, []string{q}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func statements(units []unit) []string {
+	var out []string
+	for _, u := range units {
+		out = append(out, u.stmts...)
+	}
+	return out
 }
 
 // runDDL runs DDL statements as one batch. Statements that create an object

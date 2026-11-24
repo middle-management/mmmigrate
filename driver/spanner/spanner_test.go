@@ -597,3 +597,61 @@ func TestSpannerLeaseFencesWrites(t *testing.T) {
 		t.Fatalf("recorded under a lost lease")
 	}
 }
+
+// A CREATE that fails as written, because its object existed before the
+// migration ran, fails again when the migration is retried: the retry's
+// recovery mustn't pass it as "already applied" in its IF NOT EXISTS form.
+// The same for a DROP of an object that never existed.
+func TestSpannerRetryOfFailedStatementFailsAgain(t *testing.T) {
+	db := openDB(t)
+	ctx := context.Background()
+	d := spanner.Dialect{}
+	if _, err := db.Exec(`CREATE TABLE t (id bigint PRIMARY KEY)`); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ name, sql string }{
+		{"create of an existing table", `CREATE TABLE t (id bigint PRIMARY KEY, note varchar);`},
+		{"drop of a missing table", `CREATE TABLE u (id bigint PRIMARY KEY); DROP TABLE nope;`},
+	} {
+		dir := t.TempDir()
+		writeSQL(t, dir, "001_m.sql", tc.sql)
+		for run := 1; run <= 3; run++ {
+			if err := mmmigrate.RunMigrations(ctx, db, d, os.DirFS(dir), false); err == nil {
+				t.Fatalf("%s: run %d passed", tc.name, run)
+			}
+		}
+		if n := count(t, db, `SELECT count(*) FROM mmmigrate_applied WHERE namespace = 'default'`); n != 0 {
+			t.Fatalf("%s: recorded as applied", tc.name)
+		}
+		db.Exec(`DELETE FROM mmmigrate_progress WHERE true`)
+	}
+	if n := count(t, db, `SELECT count(*) FROM information_schema.columns WHERE table_name = 't' AND column_name = 'note'`); n != 0 {
+		t.Fatal("t changed")
+	}
+}
+
+// Reset drops views built on views, whatever order the catalog lists them in.
+func TestSpannerResetDependentViews(t *testing.T) {
+	db := openDB(t)
+	for _, q := range []string{
+		`CREATE TABLE base (id bigint PRIMARY KEY)`,
+		`CREATE VIEW v1 SQL SECURITY INVOKER AS SELECT id FROM base`,
+		`CREATE VIEW v2 SQL SECURITY INVOKER AS SELECT id FROM v1`,
+		`CREATE VIEW v0 SQL SECURITY INVOKER AS SELECT id FROM v2`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	conn, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := (spanner.Dialect{}).Reset(context.Background(), conn); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, db, `SELECT count(*) FROM information_schema.views WHERE table_schema = 'public'`); n != 0 {
+		t.Fatalf("%d views left", n)
+	}
+}

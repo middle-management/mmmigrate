@@ -85,6 +85,8 @@ If a migration fails, or the process dies, part-way, the statements that ran sta
 
     Statements without such a form (`ALTER COLUMN`, `ADD CONSTRAINT`, `DROP COLUMN`, `DROP CHANGE STREAM`; Spanner has no `IF [NOT] EXISTS` for them) run as written, and fail if they had already taken effect.
 
+    A statement that would have failed as written when the migration first began is never rewritten. That is a `CREATE` of an object that already existed, a `DROP` of one that didn't, or an `ADD COLUMN` of a column that existed. The first run works this out against the schema as it was then, following the migration's own earlier creates and drops, and keeps the list in the progress row. A migration that failed because `CREATE TABLE t` found `t` already there therefore fails again when simply run again, rather than passing as if `t` were its own.
+
     A group in which one statement drops something a later statement names (`DROP TABLE t; CREATE TABLE t (…)`, or `ALTER TABLE t DROP COLUMN c; ALTER TABLE t ADD COLUMN c …`) isn't re-run at all: if it had completed, the re-run would drop what the later statement made, with the rows written to it since. The run stops instead.
 
     Either way the error says what to do: check the database, bring it in line with the whole group, and mark the group done with the `UPDATE mmmigrate_progress SET done = …, prefix = '…'` the error gives (both values: the next run checks the prefix hash), then run again.
@@ -117,7 +119,7 @@ Of several runs, exactly one sees its update change the row; the others poll (wi
 
 ## Shadow database
 
-`ResetSQL` is unused: shadow verification calls `Reset`, which reads the catalog and drops, in the order Spanner requires, every view, change stream, user index, foreign key, table (interleaved children first), sequence, and named schema, the tracking tables included. Point `-shadow-url` only at a disposable database.
+`ResetSQL` is unused: shadow verification calls `Reset`, which reads the catalog and drops, in the order Spanner requires, every view (a view after the views built on it, found by retrying), change stream, user index, foreign key, table (interleaved children first), sequence, and named schema, the tracking tables included. Point `-shadow-url` only at a disposable database.
 
 `commit` can't test `current.sql` in a rolled-back transaction on Spanner, since DDL can't run in one. It requires `-shadow-url` instead (or `-skip-verify`):
 

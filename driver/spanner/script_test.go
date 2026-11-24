@@ -122,3 +122,56 @@ func TestIsTransient(t *testing.T) {
 		}
 	}
 }
+
+// An unterminated block comment keeps its text, so the database refuses the
+// statement instead of the comment silently swallowing the script's rest.
+func TestSplitSQLUnterminatedComment(t *testing.T) {
+	got := splitSQL("CREATE TABLE a (id bigint PRIMARY KEY); /* unfinished; CREATE TABLE b (id bigint PRIMARY KEY);")
+	if len(got) != 2 || got[1] != "/* unfinished; CREATE TABLE b (id bigint PRIMARY KEY);" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestQuotedIdentifiers(t *testing.T) {
+	if s, n := splitIdent(`"a""b"`); s != "public" || n != `a"b` {
+		t.Errorf("splitIdent: %q %q", s, n)
+	}
+	// A name the patterns read only part of mustn't be taken for another
+	// object: "a""b" is not "a".
+	m := reIfNotExists.FindStringSubmatch(`CREATE TABLE IF NOT EXISTS "a""b" (id bigint PRIMARY KEY)`)
+	if m == nil || m[2] != `"a""b"` {
+		t.Errorf("reIfNotExists: %q", m)
+	}
+	if c, ok := changeOf(`CREATE TABLE "a""b" (id bigint PRIMARY KEY)`); !ok || c.key != `TABLE public.a"b` {
+		t.Errorf("changeOf: %+v %v", c, ok)
+	}
+}
+
+func TestChangeOf(t *testing.T) {
+	for q, want := range map[string]string{
+		`CREATE TABLE t (id bigint PRIMARY KEY)`:                    "TABLE public.t +",
+		`CREATE UNIQUE INDEX i ON t (x)`:                            "INDEX public.i +",
+		`CREATE SEQUENCE app.s BIT_REVERSED_POSITIVE`:               "SEQUENCE app.s +",
+		`CREATE SCHEMA app`:                                         "SCHEMA app +",
+		`CREATE CHANGE STREAM cs FOR t`:                             "CHANGE STREAM public.cs +",
+		`CREATE VIEW v SQL SECURITY INVOKER AS SELECT 1`:            "TABLE public.v +",
+		`DROP TABLE "T"`:                                            "TABLE public.T -",
+		`ALTER TABLE t ADD COLUMN c text`:                           "column public.t.c +",
+		`CREATE TABLE IF NOT EXISTS t (id bigint)`:                  "",
+		`DROP INDEX IF EXISTS i`:                                    "",
+		`CREATE OR REPLACE VIEW v SQL SECURITY INVOKER AS SELECT 1`: "",
+		`ALTER TABLE t ALTER COLUMN c SET NOT NULL`:                 "",
+	} {
+		got := ""
+		if c, ok := changeOf(q); ok {
+			got = c.key + map[bool]string{true: " +", false: " -"}[c.creates]
+		}
+		if got != want {
+			t.Errorf("changeOf(%q) = %q, want %q", q, got, want)
+		}
+	}
+	cols := tableColumns(`CREATE TABLE t (id bigint PRIMARY KEY, "Name" varchar DEFAULT 'a,b', n numeric(10, 2), CONSTRAINT ck CHECK (n > 0), PRIMARY KEY (id))`)
+	if want := []string{"id", "Name", "n"}; !reflect.DeepEqual(cols, want) {
+		t.Errorf("tableColumns = %q, want %q", cols, want)
+	}
+}

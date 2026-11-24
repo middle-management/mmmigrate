@@ -84,6 +84,7 @@ func splitSQL(s string) []string {
 			b.WriteByte('\n')
 		case c == '/' && i+1 < len(s) && s[i+1] == '*':
 			// Block comments nest, as in PostgreSQL.
+			start := i
 			depth := 1
 			i += 2
 			for i < len(s) && depth > 0 {
@@ -97,6 +98,12 @@ func splitSQL(s string) []string {
 				default:
 					i++
 				}
+			}
+			if depth > 0 {
+				// Unterminated: keep the text, so the database refuses the
+				// statement rather than the comment swallow what follows.
+				b.WriteString(s[start:])
+				break
 			}
 			i-- // the loop's i++ moves past the comment
 			b.WriteByte(' ')
@@ -148,14 +155,19 @@ func isIdentByte(c byte) bool {
 
 // Statement shapes the recovery rewrites and the existence check recognise.
 // An identifier is a plain or double-quoted name, optionally schema-qualified.
-const ident = `(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_$]*)(?:\.(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_$]*))?`
+const ident = `(?:"(?:[^"]|"")+"|[A-Za-z_][A-Za-z0-9_$]*)(?:\.(?:"(?:[^"]|"")+"|[A-Za-z_][A-Za-z0-9_$]*))?`
+
+// identEnd is what may follow an identifier in the statements matched here.
+// Requiring it keeps a pattern from matching part of a name it doesn't
+// understand, which would then be taken for a different object.
+const identEnd = `(?:\s|\(|;|$)`
 
 var (
 	reCreate      = regexp.MustCompile(`(?is)^(\s*CREATE\s+(?:UNIQUE\s+)?(?:NULL_FILTERED\s+)?(TABLE|INDEX|SEQUENCE|SCHEMA|SEARCH\s+INDEX|CHANGE\s+STREAM))\s+(?:IF\s+NOT\s+EXISTS\s+)?`)
 	reCreateView  = regexp.MustCompile(`(?is)^(\s*CREATE)\s+(?:OR\s+REPLACE\s+)?(VIEW)\s`)
 	reDrop        = regexp.MustCompile(`(?is)^(\s*DROP\s+(TABLE|INDEX|SEQUENCE|SCHEMA|VIEW|SEARCH\s+INDEX|CHANGE\s+STREAM))\s+(?:IF\s+EXISTS\s+)?`)
 	reAddColumn   = regexp.MustCompile(`(?is)^(\s*ALTER\s+TABLE\s+(?:ONLY\s+)?` + ident + `\s+ADD\s+COLUMN)\s+(?:IF\s+NOT\s+EXISTS\s+)?`)
-	reIfNotExists = regexp.MustCompile(`(?is)^\s*CREATE\s+(?:UNIQUE\s+)?(?:NULL_FILTERED\s+)?(TABLE|INDEX)\s+IF\s+NOT\s+EXISTS\s+(` + ident + `)`)
+	reIfNotExists = regexp.MustCompile(`(?is)^\s*CREATE\s+(?:UNIQUE\s+)?(?:NULL_FILTERED\s+)?(TABLE|INDEX)\s+IF\s+NOT\s+EXISTS\s+(` + ident + `)` + identEnd)
 )
 
 // idempotent rewrites a DDL statement into a form that succeeds, changing
@@ -223,8 +235,8 @@ func splitIdent(s string) (schema, name string) {
 		parts = []string{s[:i], s[i+1:]}
 	}
 	unq := func(p string) string {
-		if strings.HasPrefix(p, `"`) {
-			return strings.Trim(p, `"`)
+		if len(p) >= 2 && p[0] == '"' && p[len(p)-1] == '"' {
+			return strings.ReplaceAll(p[1:len(p)-1], `""`, `"`)
 		}
 		return strings.ToLower(p)
 	}

@@ -95,6 +95,12 @@ func TestCorpus(t *testing.T) {
 					if _, err := mmmigrate.Status(ctx, db, d, fsys); err != nil {
 						t.Fatal(err)
 					}
+					// What the crashed run recorded when it began, on the
+					// empty database.
+					fails, err := failsAsWritten(ctx, conn, statements(units))
+					if err != nil {
+						t.Fatal(err)
+					}
 					for _, done := range units[:k] {
 						if err := d.runUnit(ctx, conn, done, false); err != nil {
 							t.Fatalf("%s: replaying group: %v", at, err)
@@ -106,12 +112,12 @@ func TestCorpus(t *testing.T) {
 						}
 					}
 					if _, err := conn.ExecContext(ctx,
-						`INSERT INTO mmmigrate_progress (namespace, version, done, prefix, updated_at) VALUES ('default', 1, $1, $2, CURRENT_TIMESTAMP)`,
-						k, prefixHash(units[:k])); err != nil {
+						`INSERT INTO mmmigrate_progress (namespace, version, done, prefix, fails, updated_at) VALUES ('default', 1, $1, $2, $3, CURRENT_TIMESTAMP)`,
+						k, prefixHash(units[:k]), formatInts(fails)); err != nil {
 						t.Fatal(err)
 					}
 
-					err := mmmigrate.RunMigrations(ctx, db, d, fsys, false)
+					err = mmmigrate.RunMigrations(ctx, db, d, fsys, false)
 					switch {
 					case err == nil:
 						resumed++

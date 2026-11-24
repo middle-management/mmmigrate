@@ -10,7 +10,8 @@ import (
 const systemSchemas = `('information_schema', 'pg_catalog', 'spanner_sys')`
 
 // Reset drops every user object in the database, mmmigrate's tracking tables
-// included, in the order Spanner requires: views (they depend on tables),
+// included, in the order Spanner requires: views (they depend on tables, and
+// may depend on each other),
 // change streams, indexes the user created (Spanner refuses to drop a table
 // that has any), foreign keys (and with them the indexes Spanner manages for
 // them), tables (interleaved children before their parents), sequences, and
@@ -24,8 +25,6 @@ func (d Dialect) Reset(ctx context.Context, conn *sql.Conn) error {
 		query string
 		drop  func(row []string) string
 	}{
-		{"views", `SELECT table_schema, table_name FROM information_schema.views WHERE table_schema NOT IN ` + systemSchemas,
-			func(r []string) string { return "DROP VIEW " + qualified(r[0], r[1]) }},
 		{"change streams", `SELECT change_stream_name FROM information_schema.change_streams`,
 			func(r []string) string { return "DROP CHANGE STREAM " + quoteIdent(r[0]) }},
 		{"indexes", `SELECT table_schema, index_name, index_type FROM information_schema.indexes
@@ -45,6 +44,9 @@ func (d Dialect) Reset(ctx context.Context, conn *sql.Conn) error {
 			func(r []string) string { return "DROP SEQUENCE " + qualified(r[0], r[1]) }},
 	}
 
+	if err := d.dropViews(ctx, conn); err != nil {
+		return err
+	}
 	for i, step := range steps {
 		if step.what == "sequences" {
 			// Tables before sequences: a column default may use one.
@@ -155,4 +157,33 @@ func queryStrings(ctx context.Context, conn *sql.Conn, query string) ([][]string
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// dropViews drops every view. A view may be built on another, which can't
+// be dropped first, and the catalog doesn't say which: views are dropped one
+// at a time, in passes, keeping those Spanner refuses for the next pass,
+// until none is left or a pass drops none.
+func (d Dialect) dropViews(ctx context.Context, conn *sql.Conn) error {
+	rows, err := queryStrings(ctx, conn, `SELECT table_schema, table_name FROM information_schema.views WHERE table_schema NOT IN `+systemSchemas)
+	if err != nil {
+		return fmt.Errorf("list views: %w", err)
+	}
+	left := make([]string, len(rows))
+	for i, r := range rows {
+		left[i] = "DROP VIEW " + qualified(r[0], r[1])
+	}
+	for len(left) > 0 {
+		var next []string
+		var last error
+		for _, q := range left {
+			if err := d.runDDL(ctx, conn, []string{q}); err != nil {
+				next, last = append(next, q), err
+			}
+		}
+		if len(next) == len(left) {
+			return fmt.Errorf("drop views: %w", last)
+		}
+		left = next
+	}
+	return nil
 }
