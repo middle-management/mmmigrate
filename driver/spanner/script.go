@@ -108,14 +108,21 @@ func splitSQL(s string) []string {
 			i-- // the loop's i++ moves past the comment
 			b.WriteByte(' ')
 		case c == '\'' || c == '"':
-			// E'...' strings escape quotes with a backslash; elsewhere a
-			// doubled quote closes and reopens, which this handles as two
-			// adjacent quoted strings.
+			// A doubled quote stands for one, inside the same literal; E'...'
+			// strings also escape with a backslash, throughout.
 			escapes := c == '\'' && i > 0 && (s[i-1] == 'E' || s[i-1] == 'e') && (i < 2 || !isIdentByte(s[i-2]))
 			j := i + 1
-			for j < len(s) && s[j] != c {
+			for j < len(s) {
 				if escapes && s[j] == '\\' {
-					j++
+					j += 2
+					continue
+				}
+				if s[j] == c {
+					if j+1 < len(s) && s[j+1] == c {
+						j += 2
+						continue
+					}
+					break
 				}
 				j++
 			}

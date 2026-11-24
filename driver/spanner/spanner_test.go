@@ -612,6 +612,9 @@ func TestSpannerRetryOfFailedStatementFailsAgain(t *testing.T) {
 	for _, tc := range []struct{ name, sql string }{
 		{"create of an existing table", `CREATE TABLE t (id bigint PRIMARY KEY, note varchar);`},
 		{"drop of a missing table", `CREATE TABLE u (id bigint PRIMARY KEY); DROP TABLE nope;`},
+		// The conditional CREATE makes w, so the plain one fails as
+		// written, though w didn't exist when the migration began.
+		{"create after a conditional create", `CREATE TABLE IF NOT EXISTS w (id bigint PRIMARY KEY); CREATE TABLE w (id bigint PRIMARY KEY, note varchar);`},
 	} {
 		dir := t.TempDir()
 		writeSQL(t, dir, "001_m.sql", tc.sql)

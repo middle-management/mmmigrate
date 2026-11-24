@@ -24,6 +24,9 @@ import (
 type change struct {
 	key     string // kind and qualified name; see objectKey
 	creates bool
+	// conditional: written IF [NOT] EXISTS, or CREATE OR REPLACE. It never
+	// fails, and changes nothing if the object is already as it would make it.
+	conditional bool
 	// columns a CREATE TABLE defines, so that ADD COLUMN after it in the
 	// same migration knows them.
 	columns []string
@@ -31,31 +34,33 @@ type change struct {
 
 var (
 	reCreateObj = regexp.MustCompile(`(?is)^\s*CREATE\s+(?:UNIQUE\s+)?(?:NULL_FILTERED\s+)?(TABLE|INDEX|SEQUENCE|SCHEMA|CHANGE\s+STREAM)\s+(IF\s+NOT\s+EXISTS\s+)?(` + ident + `)` + identEnd)
-	reCreateV   = regexp.MustCompile(`(?is)^\s*CREATE\s+VIEW\s+(` + ident + `)` + identEnd)
+	reCreateV   = regexp.MustCompile(`(?is)^\s*CREATE\s+(OR\s+REPLACE\s+)?VIEW\s+(` + ident + `)` + identEnd)
 	reDropObj   = regexp.MustCompile(`(?is)^\s*DROP\s+(TABLE|INDEX|SEQUENCE|SCHEMA|VIEW)\s+(IF\s+EXISTS\s+)?(` + ident + `)` + identEnd)
 	reAddCol    = regexp.MustCompile(`(?is)^\s*ALTER\s+TABLE\s+(?:ONLY\s+)?(` + ident + `)\s+ADD\s+COLUMN\s+(IF\s+NOT\s+EXISTS\s+)?("(?:[^"]|"")+"|[A-Za-z_][A-Za-z0-9_$]*)` + identEnd)
 )
 
-// changeOf returns the change q makes, if it is a statement recovery rewrites
-// and it is written without IF [NOT] EXISTS (with it, it never fails).
+// changeOf returns the change q makes to an object, if it is a statement
+// that creates or drops one by name: those recovery rewrites, and their
+// conditional forms, which change the schema later statements are judged
+// against.
 func changeOf(q string) (change, bool) {
-	if m := reCreateObj.FindStringSubmatch(q); m != nil && m[2] == "" {
-		c := change{key: objectKey(m[1], m[3]), creates: true}
+	if m := reCreateObj.FindStringSubmatch(q); m != nil {
+		c := change{key: objectKey(m[1], m[3]), creates: true, conditional: m[2] != ""}
 		if strings.EqualFold(m[1], "TABLE") {
 			c.columns = tableColumns(q)
 		}
 		return c, true
 	}
 	if m := reCreateV.FindStringSubmatch(q); m != nil {
-		return change{key: objectKey("VIEW", m[1]), creates: true}, true
+		return change{key: objectKey("VIEW", m[2]), creates: true, conditional: m[1] != ""}, true
 	}
-	if m := reDropObj.FindStringSubmatch(q); m != nil && m[2] == "" {
-		return change{key: objectKey(m[1], m[3])}, true
+	if m := reDropObj.FindStringSubmatch(q); m != nil {
+		return change{key: objectKey(m[1], m[3]), conditional: m[2] != ""}, true
 	}
-	if m := reAddCol.FindStringSubmatch(q); m != nil && m[2] == "" {
+	if m := reAddCol.FindStringSubmatch(q); m != nil {
 		schema, table := splitIdent(m[1])
 		_, col := splitIdent(m[3])
-		return change{key: "column " + schema + "." + table + "." + col, creates: true}, true
+		return change{key: "column " + schema + "." + table + "." + col, creates: true, conditional: m[2] != ""}, true
 	}
 	return change{}, false
 }
@@ -76,7 +81,9 @@ func objectKey(kind, name string) string {
 
 // failsAsWritten returns the indexes, in the order of statements, of those
 // that would fail as written if the script ran now: each statement is judged
-// against the database, as changed by the script's statements before it.
+// against the database, as changed by the script's statements before it,
+// conditional ones (IF [NOT] EXISTS, OR REPLACE) included, though those never
+// fail themselves.
 func failsAsWritten(ctx context.Context, conn *sql.Conn, stmts []string) ([]int, error) {
 	known := map[string]bool{} // objects the script created (true) or dropped (false) so far
 	var fails []int
@@ -93,6 +100,11 @@ func failsAsWritten(ctx context.Context, conn *sql.Conn, stmts []string) ([]int,
 			}
 		}
 		if exists == c.creates {
+			if c.conditional {
+				// A no-op: the object stays as it is, columns and all.
+				known[c.key] = exists
+				continue
+			}
 			fails = append(fails, i)
 		}
 		known[c.key] = c.creates

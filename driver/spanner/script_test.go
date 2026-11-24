@@ -12,6 +12,7 @@ CREATE TABLE a (x text DEFAULT ';'); /* b; */ INSERT INTO a VALUES ($1, 'it''s')
 INSERT INTO a VALUES (E'it\'s; fine');
 SELECT $tag$ ; $tag$, "semi;colon" FROM a;
 /* outer; /* nested; */ still outer; */ SELECT 1;
+INSERT INTO t (v) VALUES (E'it''s\';still text', 'a''b;c', "x""y;z");
 `)
 	want := []string{
 		`CREATE TABLE a (x text DEFAULT ';')`,
@@ -19,6 +20,7 @@ SELECT $tag$ ; $tag$, "semi;colon" FROM a;
 		`INSERT INTO a VALUES (E'it\'s; fine')`,
 		`SELECT $tag$ ; $tag$, "semi;colon" FROM a`,
 		`SELECT 1`,
+		`INSERT INTO t (v) VALUES (E'it''s\';still text', 'a''b;c', "x""y;z")`,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %q\nwant %q", got, want)
@@ -157,14 +159,17 @@ func TestChangeOf(t *testing.T) {
 		`CREATE VIEW v SQL SECURITY INVOKER AS SELECT 1`:            "TABLE public.v +",
 		`DROP TABLE "T"`:                                            "TABLE public.T -",
 		`ALTER TABLE t ADD COLUMN c text`:                           "column public.t.c +",
-		`CREATE TABLE IF NOT EXISTS t (id bigint)`:                  "",
-		`DROP INDEX IF EXISTS i`:                                    "",
-		`CREATE OR REPLACE VIEW v SQL SECURITY INVOKER AS SELECT 1`: "",
+		`CREATE TABLE IF NOT EXISTS t (id bigint)`:                  "TABLE public.t + if",
+		`DROP INDEX IF EXISTS i`:                                    "INDEX public.i - if",
+		`CREATE OR REPLACE VIEW v SQL SECURITY INVOKER AS SELECT 1`: "TABLE public.v + if",
 		`ALTER TABLE t ALTER COLUMN c SET NOT NULL`:                 "",
 	} {
 		got := ""
 		if c, ok := changeOf(q); ok {
 			got = c.key + map[bool]string{true: " +", false: " -"}[c.creates]
+			if c.conditional {
+				got += " if"
+			}
 		}
 		if got != want {
 			t.Errorf("changeOf(%q) = %q, want %q", q, got, want)
