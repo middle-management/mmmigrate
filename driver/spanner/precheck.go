@@ -46,8 +46,13 @@ var (
 func changeOf(q string) (change, bool) {
 	if m := reCreateObj.FindStringSubmatch(q); m != nil {
 		c := change{key: objectKey(m[1], m[3]), creates: true, conditional: m[2] != ""}
-		if strings.EqualFold(m[1], "TABLE") {
+		switch {
+		case strings.EqualFold(m[1], "TABLE"):
 			c.columns = tableColumns(q)
+		case strings.EqualFold(m[1], "INDEX"):
+			// In its table's schema: the name can't carry one.
+			_, n := splitIdent(m[3])
+			c.key = "INDEX " + indexSchema(q, "public") + "." + n
 		}
 		return c, true
 	}

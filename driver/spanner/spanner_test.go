@@ -658,3 +658,40 @@ func TestSpannerResetDependentViews(t *testing.T) {
 		t.Fatalf("%d views left", n)
 	}
 }
+
+// An index on a table in another schema is checked in that schema, both by
+// the skip of an existing CREATE INDEX IF NOT EXISTS and by the precheck of
+// a plain CREATE INDEX.
+func TestSpannerIndexInOtherSchema(t *testing.T) {
+	db := openDB(t)
+	ctx := context.Background()
+	d := spanner.Dialect{}
+	for _, q := range []string{
+		`CREATE SCHEMA app`,
+		`CREATE TABLE app.t (id bigint PRIMARY KEY, x bigint)`,
+		`CREATE TABLE t (id bigint PRIMARY KEY, x bigint)`,
+		`CREATE INDEX i ON t (x)`, // public.i: must not stand in for app.i
+		`CREATE INDEX j ON app.t (x)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+
+	dir := t.TempDir()
+	writeSQL(t, dir, "001_i.sql", `CREATE INDEX IF NOT EXISTS i ON app.t (x);`)
+	if err := mmmigrate.RunMigrations(ctx, db, d, os.DirFS(dir), false); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, db, `SELECT count(*) FROM information_schema.indexes WHERE table_schema = 'app' AND index_name = 'i'`); n != 1 {
+		t.Fatalf("app.i wasn't created (skipped for public.i)")
+	}
+
+	// app.j exists: a plain CREATE INDEX j fails, and keeps failing on retry.
+	writeSQL(t, dir, "002_j.sql", `CREATE INDEX j ON app.t (x);`)
+	for run := 1; run <= 3; run++ {
+		if err := mmmigrate.RunMigrations(ctx, db, d, os.DirFS(dir), false); err == nil {
+			t.Fatalf("run %d of a duplicate index passed", run)
+		}
+	}
+}

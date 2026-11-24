@@ -180,3 +180,20 @@ func TestChangeOf(t *testing.T) {
 		t.Errorf("tableColumns = %q, want %q", cols, want)
 	}
 }
+
+// An index lives in its table's schema: CREATE INDEX i ON app.t is app.i.
+func TestIndexSchema(t *testing.T) {
+	for q, want := range map[string]string{
+		`CREATE INDEX i ON app.t (x)`:                        "app",
+		`CREATE UNIQUE INDEX IF NOT EXISTS i ON "App".t (x)`: "App",
+		`CREATE INDEX i ON t (x)`:                            "public",
+		`CREATE INDEX i ON t(x) INTERLEAVE IN p`:             "public",
+	} {
+		if got := indexSchema(q, "public"); got != want {
+			t.Errorf("indexSchema(%q) = %q, want %q", q, got, want)
+		}
+	}
+	if c, ok := changeOf(`CREATE INDEX i ON app.t (x)`); !ok || c.key != "INDEX app.i" {
+		t.Errorf("changeOf: %+v %v", c, ok)
+	}
+}

@@ -214,6 +214,9 @@ func alreadyExists(ctx context.Context, conn *sql.Conn, q string, before []strin
 		return false, nil
 	}
 	schema, name := splitIdent(m[2])
+	if !strings.EqualFold(m[1], "TABLE") {
+		schema = indexSchema(q, schema)
+	}
 	for _, b := range before {
 		if mentions(b, name) {
 			return false, nil
@@ -326,4 +329,18 @@ func recoveryConflict(stmts []string) error {
 		}
 	}
 	return nil
+}
+
+// reIndexOn finds the table an index statement is ON.
+var reIndexOn = regexp.MustCompile(`(?is)\sON\s+(?:ONLY\s+)?(` + ident + `)` + identEnd)
+
+// indexSchema is the schema an index of CREATE INDEX q lives in: its table's.
+// Spanner's PostgreSQL dialect takes no schema in the index name and puts the
+// index beside its table, and information_schema.indexes lists it there.
+func indexSchema(q, fallback string) string {
+	if m := reIndexOn.FindStringSubmatch(q); m != nil {
+		schema, _ := splitIdent(m[1])
+		return schema
+	}
+	return fallback
 }
