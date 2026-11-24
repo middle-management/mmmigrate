@@ -67,7 +67,7 @@ Spanner can't run DDL in a transaction, nor DDL and DML in the same one, so a mi
 3. A DDL batch can't share a transaction with anything, so its progress is counted once the batch has completed.
 4. Only when every statement has succeeded is the migration recorded in `mmmigrate_applied`, and its progress row deleted, in one transaction.
 
-`CREATE TABLE IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS` of objects that already exist are skipped rather than sent: on Spanner even a schema change that changes nothing takes seconds.
+`CREATE TABLE IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS` of objects that already exist are skipped rather than sent: on Spanner even a schema change that changes nothing takes seconds. A statement is skipped only if no earlier statement of its batch names the object, so `DROP TABLE t; CREATE TABLE IF NOT EXISTS t (…)` recreates `t`.
 
 ### Interrupted migrations
 
@@ -83,7 +83,11 @@ If a migration fails, or the process dies, part-way, the statements that ran sta
     | `DROP TABLE / INDEX / SEQUENCE / SCHEMA / VIEW x` | `DROP … IF EXISTS x` |
     | `ALTER TABLE t ADD COLUMN c` | `ALTER TABLE t ADD COLUMN IF NOT EXISTS c` |
 
-    Statements without such a form (`ALTER COLUMN`, `ADD CONSTRAINT`, `DROP COLUMN`, change streams) run as written, and fail if they had already taken effect. The error says so: check the database, and either undo the statement or set the progress row's `done` to the number the error gives, then run again.
+    Statements without such a form (`ALTER COLUMN`, `ADD CONSTRAINT`, `DROP COLUMN`, change streams) run as written, and fail if they had already taken effect.
+
+    A group in which one statement drops something a later statement names (`DROP TABLE t; CREATE TABLE t (…)`, or `ALTER TABLE t DROP COLUMN c; ALTER TABLE t ADD COLUMN c …`) isn't re-run at all: if it had completed, the re-run would drop what the later statement made, with the rows written to it since. The run stops instead.
+
+    Either way the error says what to do: check the database, bring it in line with the whole group, and mark the group done with the `UPDATE mmmigrate_progress SET done = …, prefix = '…'` the error gives (both values: the next run checks the prefix hash), then run again.
 
 In particular, a run that dies after a migration's DDL completed but before the migration was recorded is the last case: the next run repeats that DDL in recovery mode, which changes nothing, and records the migration.
 
@@ -106,9 +110,10 @@ WHERE namespace = $2 AND (owner = '' OR expires_at < CURRENT_TIMESTAMP)
 
 Of several runs, exactly one sees its update change the row; the others poll (with backoff, up to 2 s apart) until it is released or expires. Expiry is by Spanner's clock, so the hosts' clocks don't matter. See [Concurrency](../concurrency.md#spanner-leases) for why a lease and how it behaves.
 
-- **Lease length**: `Dialect{LeaseTTL: …}`, 60 seconds by default. The holder renews it every third of that, on a connection of its own from the pool, so a long DDL batch on the run's connection doesn't hold up the renewal. Give the pool at least two connections.
+- **Lease length**: `Dialect{LeaseTTL: …}`, 60 seconds by default. The holder renews it every third of that, on a connection of its own from the pool, so a long DDL batch on the run's connection doesn't hold up the renewal. Give the pool at least two connections: a run that can't get its renewals through stops (below).
 - **A run that dies** leaves its lease to expire: others wait at most `LeaseTTL`.
-- **A run that loses its lease** (stalled past expiry, then taken over) finds out at its next renewal; its context is cancelled with `spanner.ErrLeaseLost`, so it stops at its next statement. The migration it was running is resumed by the next run, as above.
+- **A run that loses its lease** stops: its context is cancelled with `spanner.ErrLeaseLost` when a renewal finds another owner, or when no renewal has been confirmed by the time the last one could expire (less a tenth of `LeaseTTL`), since another run may take it then. It stops at its next statement; a DDL batch already sent completes regardless. The migration it was running is resumed by the next run, as above.
+- **Writes are fenced**: each transaction that counts a DML statement or records a migration first checks, in the same transaction, that the lease is still the run's, so a run that lost it can't commit progress or records even before it notices.
 
 ## Shadow database
 

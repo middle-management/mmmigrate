@@ -189,18 +189,28 @@ func (d Dialect) AcquireLock(ctx context.Context, db *sql.DB, conn *sql.Conn, na
 	take := `UPDATE mmmigrate_lock SET owner = $1, expires_at = ` + d.expiry() + `
 		WHERE namespace = $2 AND (owner = '' OR expires_at < CURRENT_TIMESTAMP)`
 	wait := 50 * time.Millisecond
+	var taken time.Time
 	for {
+		// The lease runs from Spanner's time at the update, which is after
+		// this; measuring from here keeps the holder's deadline early.
+		sent := time.Now()
 		res, err := conn.ExecContext(ctx, take, owner, namespace)
-		if err == nil {
-			if n, err := res.RowsAffected(); err == nil && n == 1 {
+		if err != nil {
+			if ctx.Err() != nil || !isTransient(err) {
+				return nil, nil, fmt.Errorf("take lease: %w", err)
+			}
+			// Two runs racing for the row: one may be aborted. Retried like
+			// a held lease.
+			slog.Debug("migration lease: take aborted, retrying", "namespace", namespace, "error", err)
+		} else {
+			n, err := res.RowsAffected()
+			if err != nil {
+				return nil, nil, fmt.Errorf("take lease: %w", err)
+			}
+			if n == 1 {
+				taken = sent
 				break
 			}
-		} else if ctx.Err() != nil {
-			return nil, nil, err
-		} else {
-			// An aborted transaction (two runs racing for the row) is
-			// retried like a held lease.
-			slog.Debug("migration lease: take failed, retrying", "namespace", namespace, "error", err)
 		}
 		if err := sleep(ctx, jitter(wait)); err != nil {
 			return nil, nil, err
@@ -208,10 +218,10 @@ func (d Dialect) AcquireLock(ctx context.Context, db *sql.DB, conn *sql.Conn, na
 		wait = min(wait*2, 2*time.Second)
 	}
 
-	lctx, cancel := context.WithCancelCause(ctx)
+	lctx, cancel := context.WithCancelCause(context.WithValue(ctx, leaseKey{}, lease{namespace, owner}))
 	stop := make(chan struct{})
 	done := make(chan struct{})
-	go d.renew(lctx, db, namespace, owner, stop, done, cancel)
+	go d.renew(lctx, db, namespace, owner, taken, stop, done, cancel)
 
 	release := func() {
 		close(stop)
@@ -237,35 +247,85 @@ func (d Dialect) AcquireLock(ctx context.Context, db *sql.DB, conn *sql.Conn, na
 	return lctx, release, nil
 }
 
-func (d Dialect) renew(ctx context.Context, db *sql.DB, namespace, owner string, stop <-chan struct{}, done chan<- struct{}, cancel context.CancelCauseFunc) {
+// renew extends the lease every third of its TTL. The holder may go on only
+// while the lease is known to be its own: if no renewal has been confirmed by
+// the time the last confirmed one could expire (less a tenth of the TTL, for
+// the clocks' drift), it stops as if the lease were lost, since another run
+// may then take it.
+func (d Dialect) renew(ctx context.Context, db *sql.DB, namespace, owner string, confirmed time.Time, stop <-chan struct{}, done chan<- struct{}, cancel context.CancelCauseFunc) {
 	defer close(done)
-	every := d.ttl() / 3
+	ttl := d.ttl()
+	every := ttl / 3
 	t := time.NewTicker(every)
 	defer t.Stop()
 	q := `UPDATE mmmigrate_lock SET expires_at = ` + d.expiry() + ` WHERE namespace = $1 AND owner = $2`
 	for {
+		deadline := confirmed.Add(ttl - ttl/10)
 		select {
 		case <-stop:
 			return
 		case <-ctx.Done():
 			return
+		case <-time.After(time.Until(deadline)):
+			slog.Error("migration lease not renewed before it could expire: stopping", "namespace", namespace)
+			cancel(fmt.Errorf("%w: not renewed within %v", ErrLeaseLost, ttl))
+			return
 		case <-t.C:
 		}
-		rctx, rcancel := context.WithTimeout(ctx, every)
+		sent := time.Now()
+		rctx, rcancel := context.WithDeadline(ctx, deadline)
 		res, err := db.ExecContext(rctx, q, namespace, owner)
 		rcancel()
 		if err != nil {
-			// Not known lost: the lease may still be ours. Try again at the
-			// next tick.
-			slog.Debug("migration lease: renewal failed", "namespace", namespace, "error", err)
+			// Not known lost: the lease may still be ours until the deadline.
+			slog.Warn("migration lease: renewal failed, retrying", "namespace", namespace, "error", err)
 			continue
 		}
-		if n, err := res.RowsAffected(); err == nil && n == 0 {
+		n, err := res.RowsAffected()
+		if err != nil {
+			slog.Warn("migration lease: renewal failed, retrying", "namespace", namespace, "error", err)
+			continue
+		}
+		if n == 0 {
 			slog.Error("migration lease lost: another run took it over after it expired", "namespace", namespace)
 			cancel(ErrLeaseLost)
 			return
 		}
+		confirmed = sent
 	}
+}
+
+// lease identifies the lease a context's work runs under, so that the writes
+// that commit a migration's progress check, in their transaction, that it is
+// still this run's: a run that lost its lease can't count or record anything.
+type lease struct{ namespace, owner string }
+
+type leaseKey struct{}
+
+// checkLease fails, inside tx, if ctx runs under a lease another run has
+// since taken. DDL can't be fenced this way (it can't run in a transaction);
+// the renewal deadline above stops the run before its next statement.
+func checkLease(ctx context.Context, tx *sql.Tx) error {
+	l, ok := ctx.Value(leaseKey{}).(lease)
+	if !ok {
+		return nil
+	}
+	var n int64
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM mmmigrate_lock WHERE namespace = $1 AND owner = $2`, l.namespace, l.owner).Scan(&n); err != nil {
+		return fmt.Errorf("check lease: %w", err)
+	}
+	if n == 0 {
+		return ErrLeaseLost
+	}
+	return nil
+}
+
+// isTransient reports whether err is an aborted transaction (SQLSTATE 40001),
+// which Spanner returns to one of two that conflict, and which is worth
+// retrying.
+func isTransient(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "40001") || strings.Contains(msg, "aborted")
 }
 
 func randomOwner() string {
@@ -377,7 +437,9 @@ func (d Dialect) ApplyMigration(ctx context.Context, conn *sql.Conn, namespace s
 		if err := d.runUnit(ctx, conn, u, recover); err != nil {
 			if recover {
 				return fmt.Errorf("%w (re-running a statement group an earlier run may have applied; "+
-					"if the database already reflects it, bring it fully in line and set done = %d in its mmmigrate_progress row)", err, i+1)
+					"once the database reflects every statement of it, mark it done: "+
+					"UPDATE mmmigrate_progress SET done = %d, prefix = '%s' WHERE namespace = '%s' AND version = %d)",
+					err, i+1, prefixHash(units[:i+1]), namespace, version)
 			}
 			return err
 		}
@@ -389,6 +451,9 @@ func (d Dialect) ApplyMigration(ctx context.Context, conn *sql.Conn, namespace s
 	}
 
 	return inTx(ctx, conn, func(tx *sql.Tx) error {
+		if err := checkLease(ctx, tx); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, Dialect{}.InsertApplied(), namespace, version, name); err != nil {
 			return fmt.Errorf("record migration %d: %w", version, err)
 		}
@@ -417,6 +482,9 @@ func (d Dialect) ApplyCurrent(ctx context.Context, conn *sql.Conn, namespace, sc
 // uncounted.
 func (d Dialect) runDMLCounted(ctx context.Context, conn *sql.Conn, u unit, namespace string, version int, through []unit) error {
 	return inTx(ctx, conn, func(tx *sql.Tx) error {
+		if err := checkLease(ctx, tx); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, u.stmts[0]); err != nil {
 			return &stmtError{u.stmts[0], err}
 		}
@@ -449,6 +517,9 @@ func (d Dialect) runUnit(ctx context.Context, conn *sql.Conn, u unit, recover bo
 		return nil
 	}
 	if recover {
+		if err := recoveryConflict(u.stmts); err != nil {
+			return err
+		}
 		for _, q := range u.stmts {
 			if err := d.runDDL(ctx, conn, []string{idempotent(q)}); err != nil {
 				return err
@@ -469,8 +540,11 @@ func (d Dialect) runUnit(ctx context.Context, conn *sql.Conn, u unit, recover bo
 // queues it. The batch is retried then.
 func (d Dialect) runDDL(ctx context.Context, conn *sql.Conn, stmts []string) error {
 	var batch []string
-	for _, q := range stmts {
-		exists, err := alreadyExists(ctx, conn, q)
+	for i, q := range stmts {
+		// Only a statement no earlier one in the batch touches: the check
+		// sees the schema before the batch, so after DROP TABLE t,
+		// CREATE TABLE IF NOT EXISTS t must run although t exists now.
+		exists, err := alreadyExists(ctx, conn, q, stmts[:i])
 		if err != nil {
 			return err
 		}

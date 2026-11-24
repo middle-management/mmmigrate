@@ -1,6 +1,7 @@
 package spanner
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 )
@@ -78,6 +79,43 @@ func TestSplitIdent(t *testing.T) {
 		s, n := splitIdent(in)
 		if [2]string{s, n} != want {
 			t.Errorf("splitIdent(%q) = %q, %q, want %q", in, s, n, want)
+		}
+	}
+}
+
+func TestRecoveryConflict(t *testing.T) {
+	for _, tc := range []struct {
+		stmts []string
+		ok    bool
+	}{
+		{[]string{`DROP TABLE t`, `CREATE TABLE t (id bigint PRIMARY KEY)`}, false},
+		{[]string{`DROP TABLE IF EXISTS t`, `CREATE INDEX i ON t (id)`}, false},
+		{[]string{`ALTER TABLE t DROP COLUMN c`, `ALTER TABLE t ADD COLUMN c text`}, false},
+		{[]string{`DROP INDEX i`, `CREATE INDEX i ON t (x)`}, false},
+		{[]string{`DROP TABLE "T"`, `CREATE TABLE "T" (id bigint PRIMARY KEY)`}, false},
+		// Nothing dropped is named again: each statement re-runs safely.
+		{[]string{`DROP TABLE old`, `CREATE TABLE t (id bigint PRIMARY KEY)`}, true},
+		{[]string{`DROP TABLE t`, `CREATE TABLE t2 (id bigint PRIMARY KEY)`}, true},
+		{[]string{`CREATE TABLE t (id bigint PRIMARY KEY)`, `DROP TABLE t`}, true},
+		{[]string{`ALTER TABLE t ADD COLUMN c text`, `CREATE INDEX i ON t (c)`}, true},
+		{[]string{`DROP TABLE "T"`, `CREATE TABLE t (id bigint PRIMARY KEY)`}, true},
+	} {
+		err := recoveryConflict(tc.stmts)
+		if (err == nil) != tc.ok {
+			t.Errorf("recoveryConflict(%q) = %v, want ok=%v", tc.stmts, err, tc.ok)
+		}
+	}
+}
+
+func TestIsTransient(t *testing.T) {
+	for msg, want := range map[string]bool{
+		"ERROR: Transaction was aborted. (SQLSTATE 40001)": true,
+		"spanner: code = \"Aborted\", desc = \"...\"":      true,
+		"ERROR: permission denied (SQLSTATE 42501)":        false,
+		"sql: database is closed":                          false,
+	} {
+		if got := isTransient(errors.New(msg)); got != want {
+			t.Errorf("isTransient(%q) = %v, want %v", msg, got, want)
 		}
 	}
 }

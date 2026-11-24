@@ -54,9 +54,9 @@ What can go wrong, and what happens:
 | Event | Outcome |
 |-------|---------|
 | The run dies | Its lease expires; the next run waits at most `LeaseTTL`, then takes it. A migration it left part-way is resumed ([Spanner: interrupted migrations](drivers/spanner.md#interrupted-migrations)). |
-| A renewal fails (network, no free connection) | Nothing yet: the lease may still be held. The next tick tries again. |
-| The run stalls past expiry and another takes the lease | The stalled run's next renewal changes no row: its context is cancelled with `spanner.ErrLeaseLost`, and it stops at its next statement. A DDL batch already sent to Spanner completes regardless; the new holder resumes the migration in recovery mode. |
-| The pool has a single connection | Renewals wait for the run's connection, so a run longer than `LeaseTTL` can lose its lease. Give the pool at least two connections. |
+| A renewal fails (network, no free connection) | The next tick tries again. If none has been confirmed by the time the last confirmed lease could expire (less a tenth of `LeaseTTL`), the run's context is cancelled with `spanner.ErrLeaseLost` and it stops at its next statement: another run may take the lease from then on. |
+| The run stalls past expiry and another takes the lease | The stalled run's next renewal changes no row, or its deadline passes: it stops the same way. A DDL batch already sent to Spanner completes regardless; the new holder resumes the migration in recovery mode. Every transaction that counts progress or records a migration checks the lease first, so the stalled run can't commit either before it notices. |
+| The pool has a single connection | Renewals wait for the run's connection, so a run longer than `LeaseTTL` stops when its renewal deadline passes. Give the pool at least two connections. |
 
 A lease only excludes runs that cooperate; like the other dialects' locks, it doesn't protect application traffic.
 

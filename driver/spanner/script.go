@@ -3,6 +3,7 @@ package spanner
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"regexp"
 	"strings"
 )
@@ -172,13 +173,19 @@ func idempotent(q string) string {
 
 // alreadyExists reports whether q is CREATE TABLE or CREATE INDEX ... IF NOT
 // EXISTS of a table or index that exists, so running it would change
-// nothing.
-func alreadyExists(ctx context.Context, conn *sql.Conn, q string) (bool, error) {
+// nothing. It says no if any of before, the statements to run ahead of q,
+// names the object: they may drop or change it.
+func alreadyExists(ctx context.Context, conn *sql.Conn, q string, before []string) (bool, error) {
 	m := reIfNotExists.FindStringSubmatch(q)
 	if m == nil {
 		return false, nil
 	}
 	schema, name := splitIdent(m[2])
+	for _, b := range before {
+		if mentions(b, name) {
+			return false, nil
+		}
+	}
 	var query string
 	if strings.EqualFold(m[1], "TABLE") {
 		query = `SELECT count(*) FROM information_schema.tables WHERE table_schema = $1 AND table_name = $2`
@@ -231,4 +238,59 @@ func identDot(s string) int {
 // quoteIdent quotes a name for DDL.
 func quoteIdent(s string) string {
 	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
+}
+
+var (
+	reDropObject = regexp.MustCompile(`(?is)^\s*DROP\s+(?:TABLE|INDEX|SEQUENCE|SCHEMA|VIEW|SEARCH\s+INDEX|CHANGE\s+STREAM)\s+(?:IF\s+EXISTS\s+)?(` + ident + `)`)
+	reDropPart   = regexp.MustCompile(`(?is)\bDROP\s+(?:COLUMN|CONSTRAINT)\s+(?:IF\s+EXISTS\s+)?("[^"]+"|[A-Za-z_][A-Za-z0-9_$]*)`)
+)
+
+// dropped returns the names of what q removes: a DROP statement's object, or
+// the columns and constraints an ALTER TABLE drops.
+func dropped(q string) []string {
+	if m := reDropObject.FindStringSubmatch(q); m != nil {
+		_, name := splitIdent(m[1])
+		return []string{name}
+	}
+	if strings.EqualFold(firstWord(q), "ALTER") {
+		var names []string
+		for _, m := range reDropPart.FindAllStringSubmatch(q, -1) {
+			_, name := splitIdent(m[1])
+			names = append(names, name)
+		}
+		return names
+	}
+	return nil
+}
+
+// mentions reports whether q names name as an identifier: case-insensitively
+// unless the name has upper-case letters (then it was quoted, and matches as
+// written).
+func mentions(q, name string) bool {
+	pattern := `(^|[^A-Za-z0-9_$])"?` + regexp.QuoteMeta(name) + `"?($|[^A-Za-z0-9_$])`
+	if name == strings.ToLower(name) {
+		pattern = "(?i)" + pattern
+	}
+	return regexp.MustCompile(pattern).MatchString(q)
+}
+
+// recoveryConflict refuses to re-run a statement group, statement by
+// statement in idempotent form, when one statement drops something a later
+// one names. If the group had completed before the run that applied it
+// died, the drop would take out what the later statement made, with any rows
+// written to it since: DROP TABLE t; CREATE TABLE t (...), or ALTER TABLE t
+// DROP COLUMN c; ALTER TABLE t ADD COLUMN c. Such a group needs a person to
+// say how far it got.
+func recoveryConflict(stmts []string) error {
+	for i, q := range stmts {
+		for _, name := range dropped(q) {
+			for _, later := range stmts[i+1:] {
+				if mentions(later, name) {
+					return fmt.Errorf("can't safely re-run this statement group: %q drops %s, which a later statement of the group (%q) names, "+
+						"so re-running it after it completed would drop what that statement made", firstLine(q), name, firstLine(later))
+				}
+			}
+		}
+	}
+	return nil
 }

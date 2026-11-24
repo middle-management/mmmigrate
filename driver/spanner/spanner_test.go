@@ -477,3 +477,123 @@ func dumpSchema(t *testing.T, db *sql.DB) string {
 	}
 	return out.String()
 }
+
+// A batch that drops an object and creates it again with IF NOT EXISTS
+// recreates it: the existence check must not skip a CREATE that an earlier
+// statement of the batch makes necessary.
+func TestSpannerBatchDropThenCreateIfNotExists(t *testing.T) {
+	db := openDB(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	writeSQL(t, dir, "001_t.sql", `CREATE TABLE t (id bigint PRIMARY KEY);`)
+	writeSQL(t, dir, "002_rebuild.sql", `DROP TABLE t; CREATE TABLE IF NOT EXISTS t (id bigint PRIMARY KEY, note varchar);`)
+	if err := mmmigrate.RunMigrations(ctx, db, spanner.Dialect{}, os.DirFS(dir), false); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, db, `SELECT count(*) FROM information_schema.columns WHERE table_name = 't' AND column_name = 'note'`); n != 1 {
+		t.Fatalf("t wasn't recreated (note columns: %d)", n)
+	}
+}
+
+// A statement group that drops what a later statement of it creates isn't
+// re-run automatically after an interrupted run: if it had completed, the
+// re-run would drop the new table and the rows written to it since.
+func TestSpannerRecoveryRefusesDropThenCreate(t *testing.T) {
+	db := openDB(t)
+	ctx := context.Background()
+	d := spanner.Dialect{}
+	dir := t.TempDir()
+	fsys := os.DirFS(dir)
+	if _, err := mmmigrate.Status(ctx, db, d, fsys); err != nil {
+		t.Fatal(err)
+	}
+	// The crashed run: its progress row, and the group's effect (the new t,
+	// already holding a row).
+	for _, q := range []string{
+		`INSERT INTO mmmigrate_progress (namespace, version, done, prefix, updated_at)
+			VALUES ('default', 1, 0, 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', CURRENT_TIMESTAMP)`,
+		`CREATE TABLE t (id bigint PRIMARY KEY)`,
+		`INSERT INTO t (id) VALUES (1)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	writeSQL(t, dir, "001_rebuild.sql", `DROP TABLE IF EXISTS t; CREATE TABLE t (id bigint PRIMARY KEY);`)
+	err := mmmigrate.RunMigrations(ctx, db, d, fsys, false)
+	if err == nil || !strings.Contains(err.Error(), "can't safely re-run") || !strings.Contains(err.Error(), "SET done = 1, prefix = '") {
+		t.Fatalf("expected the re-run refused with how to mark it done, got %v", err)
+	}
+	if n := count(t, db, `SELECT count(*) FROM t`); n != 1 {
+		t.Fatalf("t has %d rows: the re-run dropped it", n)
+	}
+}
+
+// A holder whose renewals can't be confirmed stops before its lease could
+// expire, rather than go on while another run may take it.
+func TestSpannerLeaseUnrenewed(t *testing.T) {
+	db := openDB(t)
+	ctx := context.Background()
+	d := spanner.Dialect{LeaseTTL: 1500 * time.Millisecond}
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	// Renewals go through a pool that can't serve them.
+	dead, err := sql.Open("pgx", os.Getenv(envURL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dead.Close()
+	lctx, release, err := d.AcquireLock(ctx, dead, conn, "ns")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	select {
+	case <-lctx.Done():
+		if !errors.Is(context.Cause(lctx), spanner.ErrLeaseLost) {
+			t.Fatalf("cause %v, want ErrLeaseLost", context.Cause(lctx))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the holder went on past its lease's expiry")
+	}
+}
+
+// A run whose lease was taken over can't count or record anything, even
+// before its renewal notices: the counted transactions check the lease.
+func TestSpannerLeaseFencesWrites(t *testing.T) {
+	db := openDB(t)
+	ctx := context.Background()
+	d := spanner.Dialect{}
+	if _, err := mmmigrate.Status(ctx, db, d, os.DirFS(t.TempDir())); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE t (id bigint PRIMARY KEY)`); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	lctx, release, err := d.AcquireLock(ctx, db, conn, "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if _, err := db.Exec(`UPDATE mmmigrate_lock SET owner = 'someone-else' WHERE namespace = 'default'`); err != nil {
+		t.Fatal(err)
+	}
+	err = d.ApplyMigration(lctx, conn, "default", 1, "fill", `INSERT INTO t (id) VALUES (1);`)
+	if !errors.Is(err, spanner.ErrLeaseLost) {
+		t.Fatalf("ApplyMigration under a lost lease: %v, want ErrLeaseLost", err)
+	}
+	if n := count(t, db, `SELECT count(*) FROM t`); n != 0 {
+		t.Fatalf("the insert committed under a lost lease")
+	}
+	if n := count(t, db, `SELECT count(*) FROM mmmigrate_applied WHERE namespace = 'default'`); n != 0 {
+		t.Fatalf("recorded under a lost lease")
+	}
+}
