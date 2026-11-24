@@ -201,11 +201,19 @@ func shadowBaselines(flagPaths []string, shadowURL string) ([]mmmigrate.Option, 
 // verification leaves the migrations directory untouched.
 func commit(ctx context.Context, db *sql.DB, shadowURL, absDir, description string, skipVerify bool, opts ...mmmigrate.Option) error {
 	if !skipVerify {
-		fmt.Println("Testing migration against database...")
-		if err := mmmigrate.TestCurrentMigration(ctx, db, os.DirFS(absDir)); err != nil {
-			return fmt.Errorf("migration test failed: %w", err)
+		if _, ok := dialect.(mmmigrate.Executor); ok {
+			// The rolled-back test needs DDL in a transaction, which this
+			// database can't run (Spanner): the shadow replay is the test.
+			if shadowURL == "" {
+				return fmt.Errorf("this database can't run current.sql in a transaction to test it: pass -shadow-url (or SHADOW_DATABASE_URL) to verify it on a shadow database, or -skip-verify")
+			}
+		} else {
+			fmt.Println("Testing migration against database...")
+			if err := mmmigrate.TestCurrentMigration(ctx, db, os.DirFS(absDir)); err != nil {
+				return fmt.Errorf("migration test failed: %w", err)
+			}
+			fmt.Println("✓ Migration test passed")
 		}
-		fmt.Println("✓ Migration test passed")
 
 		// The replay applies the numbered migrations plus current.sql, which
 		// is the same SQL the committed file will hold.
@@ -334,7 +342,7 @@ func resolveDir(dir string) string {
 
 func openDB(databaseURL string) (*sql.DB, func()) {
 	if dialect == nil {
-		fatal("no database driver compiled in (build with -tags postgres, -tags sqlite, or -tags mysql)")
+		fatal("no database driver compiled in (build with -tags postgres, -tags sqlite, -tags mysql, or -tags spanner)")
 	}
 
 	if databaseURL == "" {

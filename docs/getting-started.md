@@ -34,6 +34,12 @@ mmmigrate ships as a single Go binary. Pick the build tag for your database driv
     go install -tags mysql github.com/middle-management/mmmigrate/cmd/mmmigrate@latest
     ```
 
+=== "Spanner"
+
+    ```bash
+    go install -tags spanner github.com/middle-management/mmmigrate/cmd/mmmigrate@latest
+    ```
+
 ### Prebuilt binaries
 
 Prebuilt binaries are also published on [GitHub Releases](https://github.com/middle-management/mmmigrate/releases).
@@ -109,6 +115,9 @@ This:
 !!! warning "MySQL needs a shadow database"
     MySQL/MariaDB cannot roll back DDL, so the dry-run can't safely test schema changes against your dev database. Use [`-shadow-url`](shadow-database.md) to verify against a disposable database instead.
 
+!!! warning "Spanner needs one too"
+    Spanner can't run DDL in a transaction, so on Spanner `commit` refuses to run without `-shadow-url` or `-skip-verify`.
+
 ## Apply in production
 
 In production, run only the committed numbered migrations — never `-current`:
@@ -124,4 +133,4 @@ Each migration runs in its own transaction (where the dialect supports it). Alre
 - [The full workflow](workflow.md) — edit, apply, commit, revert.
 - [Includes](includes.md) — share SQL between migrations.
 - [Integrity](integrity.md) — how mmmigrate detects tampering.
-- [Driver-specific notes](drivers/index.md) — PostgreSQL, SQLite, MySQL caveats.
+- [Driver-specific notes](drivers/index.md) — PostgreSQL, SQLite, MySQL, Spanner caveats.

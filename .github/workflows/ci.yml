@@ -33,6 +33,12 @@ jobs:
       - name: Build (mysql)
         run: cd cmd/mmmigrate && go build -tags mysql .
 
+      - name: Build (spanner)
+        run: cd cmd/mmmigrate && go build -tags spanner .
+
+      - name: Spanner unit tests
+        run: cd driver/spanner && go vet ./... && go test -race ./...
+
       - name: Vet
         run: go vet ./...
 
@@ -109,3 +115,33 @@ jobs:
         run: cd driver/mysql && go test -race ./...
         env:
           MMMIGRATE_TEST_MYSQL_URL: root:root@tcp(localhost:3306)/mmmigrate_test?multiStatements=true
+
+  spanner:
+    name: spanner (emulator)
+    runs-on: ubuntu-latest
+
+    services:
+      # The Spanner emulator with PGAdapter in front of it: PostgreSQL wire
+      # protocol on 5432, the emulator's gRPC on 9010. PGAdapter creates a
+      # database the first time one is named.
+      spanner:
+        image: gcr.io/cloud-spanner-pg-adapter/pgadapter-emulator
+        ports:
+          - 5432:5432
+          - 9010:9010
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Spanner integration tests (pgx through PGAdapter)
+        run: cd driver/spanner && go test -race ./...
+        env:
+          MMMIGRATE_TEST_SPANNER_URL: postgres://x@localhost:5432/mmmigrate_test?sslmode=disable
+
+      - name: Spanner integration tests (go-sql-spanner)
+        run: cd driver/spanner/gosqlspannertest && go vet ./... && go test -race ./...
+        env:
+          MMMIGRATE_TEST_SPANNER_EMULATOR_HOST: localhost:9010

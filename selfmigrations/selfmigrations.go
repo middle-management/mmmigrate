@@ -18,7 +18,7 @@ import (
 	"io/fs"
 )
 
-//go:embed postgres/[0-9]*.sql sqlite/[0-9]*.sql mysql/[0-9]*.sql
+//go:embed postgres/[0-9]*.sql sqlite/[0-9]*.sql mysql/[0-9]*.sql spanner/[0-9]*.sql
 var files embed.FS
 
 var (
@@ -28,6 +28,8 @@ var (
 	SQLite = sub("sqlite")
 	// MySQL is used by the mysql dialect.
 	MySQL = sub("mysql")
+	// Spanner is used by the spanner dialect (Spanner's PostgreSQL dialect).
+	Spanner = sub("spanner")
 )
 
 func sub(dir string) fs.FS {
