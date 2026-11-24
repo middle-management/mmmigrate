@@ -320,6 +320,18 @@ func ValidateChain(migrationsDir string) error {
 		return err
 	}
 
+	// Two files with one version: the runner refuses to load them, and one of
+	// them was chained after a different migration than the file it now
+	// follows, typically two branches that each committed the next number
+	// and were merged. Name them rather than report the chain mismatch the
+	// second one would show.
+	for i := 1; i < len(files); i++ {
+		if files[i].version == files[i-1].version {
+			return fmt.Errorf("duplicate migration version %d: %s and %s (renumber the later one and recompute its chain)",
+				files[i].version, files[i-1].filename, files[i].filename)
+		}
+	}
+
 	prevChain := ""
 	for _, f := range files {
 		content, err := os.ReadFile(filepath.Join(migrationsDir, f.filename))
@@ -383,7 +395,12 @@ func listMigrationFiles(migrationsDir string) ([]migFile, error) {
 		files = append(files, migFile{version, entry.Name()})
 	}
 
-	sort.Slice(files, func(i, j int) bool { return files[i].version < files[j].version })
+	sort.Slice(files, func(i, j int) bool {
+		if files[i].version != files[j].version {
+			return files[i].version < files[j].version
+		}
+		return files[i].filename < files[j].filename
+	})
 	return files, nil
 }
 
