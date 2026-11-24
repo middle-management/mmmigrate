@@ -526,7 +526,7 @@ func testNamespaces(t *testing.T, h Harness) {
 // applies would block until the timeout.
 func testConcurrentApply(t *testing.T, h Harness) {
 	d := h.Dialect(t)
-	if d.Lock() == "" {
+	if _, ok := d.(mmmigrate.Locker); !ok && d.Lock() == "" {
 		t.Skip("dialect has no migration lock")
 	}
 
@@ -613,6 +613,39 @@ type upgradedDialect struct {
 
 func (d upgradedDialect) SelfMigrations() fs.FS { return d.self }
 
+// The engine finds a dialect's optional interfaces by type assertion, so the
+// wrapper has to keep those the wrapped dialect implements.
+type (
+	upgradedExecutor struct {
+		upgradedDialect
+		mmmigrate.Executor
+	}
+	upgradedLocker struct {
+		upgradedDialect
+		mmmigrate.Locker
+	}
+	upgradedExecutorLocker struct {
+		upgradedDialect
+		mmmigrate.Executor
+		mmmigrate.Locker
+	}
+)
+
+func withSelfMigrations(d mmmigrate.Dialect, self fs.FS) mmmigrate.Dialect {
+	u := upgradedDialect{d, self}
+	e, isExecutor := d.(mmmigrate.Executor)
+	l, isLocker := d.(mmmigrate.Locker)
+	switch {
+	case isExecutor && isLocker:
+		return upgradedExecutorLocker{u, e, l}
+	case isExecutor:
+		return upgradedExecutor{u, e}
+	case isLocker:
+		return upgradedLocker{u, l}
+	}
+	return u
+}
+
 // testSelfMigrations checks that mmmigrate records its own migrations under
 // the reserved namespace and upgrades an existing database when a release
 // adds more.
@@ -667,7 +700,7 @@ func testSelfMigrations(t *testing.T, h Harness) {
 	next := fmt.Sprintf("%03d_probe.sql", len(self)+1)
 	upgraded[next] = &fstest.MapFile{Data: []byte(`CREATE TABLE self_upgrade_probe (id INTEGER PRIMARY KEY);`)}
 
-	if err := mmmigrate.RunMigrations(ctx, db, upgradedDialect{d, upgraded}, fsys, false); err != nil {
+	if err := mmmigrate.RunMigrations(ctx, db, withSelfMigrations(d, upgraded), fsys, false); err != nil {
 		t.Fatal(err)
 	}
 	rowCount(t, db, "self_upgrade_probe") // fails the test if the table is missing

@@ -7,6 +7,7 @@ The shadow database solves this: it's a separate, disposable database that mmmig
 ## When to use it
 
 - **MySQL/MariaDB** — essentially required, since the normal commit dry-run can't roll back DDL.
+- **Spanner** — required: DDL can't run in a transaction, so `commit` refuses without `-shadow-url` (or `-skip-verify`).
 - **Any database** — useful as an extra safety net before committing, especially in CI. It catches problems like migrations that depend on manual schema changes or ordering issues that only surface on a fresh database.
 
 ## Setup
@@ -23,6 +24,14 @@ Create a dedicated database for shadow use. It will be **fully wiped** on every 
 
     ```bash
     mysql -e "CREATE DATABASE myapp_shadow"
+    ```
+
+=== "Spanner"
+
+    With the `pgadapter-emulator` image, any new database name is created on first connect. On real Spanner, create it first:
+
+    ```bash
+    gcloud spanner databases create mydb_shadow --instance=... --database-dialect=POSTGRESQL
     ```
 
 === "SQLite"

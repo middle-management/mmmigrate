@@ -86,12 +86,13 @@ func (m *Migrator) prepareTrackingTables(ctx context.Context, conn *sql.Conn) er
 		fsys:      m.dialect.SelfMigrations(),
 		namespace: SelfNamespace,
 	}
-	if err := self.acquireLock(ctx, conn); err != nil {
+	ctx, release, err := self.acquireLock(ctx, conn)
+	if err != nil {
 		return err
 	}
-	defer self.releaseLock(ctx, conn)
+	defer release()
 
-	if _, err := conn.ExecContext(ctx, m.dialect.CreateMigrationsTable()); err != nil {
+	if err := m.exec(ctx, conn, m.dialect.CreateMigrationsTable()); err != nil {
 		return fmt.Errorf("failed to create migrations table: %w", err)
 	}
 
@@ -160,6 +161,14 @@ func (m *Migrator) runCurrentMigration(ctx context.Context, conn *sql.Conn, mig 
 		return nil
 	}
 
+	if e, ok := m.dialect.(Executor); ok {
+		if err := e.ApplyCurrent(ctx, conn, m.namespace, processedSQL, checksum); err != nil {
+			return formatSQLError(processedSQL, err, "failed to apply current.sql")
+		}
+		slog.Info("applied current.sql", "checksum", checksum[:8])
+		return nil
+	}
+
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to start transaction for current.sql: %w", err)
@@ -183,6 +192,14 @@ func (m *Migrator) runCurrentMigration(ctx context.Context, conn *sql.Conn, mig 
 }
 
 func (m *Migrator) runMigration(ctx context.Context, conn *sql.Conn, mig *source.Migration) error {
+	if e, ok := m.dialect.(Executor); ok {
+		if err := e.ApplyMigration(ctx, conn, m.namespace, mig.Version, mig.Name, mig.SQL); err != nil {
+			return formatSQLError(mig.SQL, err, fmt.Sprintf("failed to apply migration %d (%s)", mig.Version, mig.Name))
+		}
+		slog.Info("applied migration", "namespace", m.namespace, "version", mig.Version, "name", mig.Name)
+		return nil
+	}
+
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to start transaction: %w", err)
@@ -205,16 +222,35 @@ func (m *Migrator) runMigration(ctx context.Context, conn *sql.Conn, mig *source
 	return nil
 }
 
-// acquireLock takes the dialect's session-scoped lock on conn. The caller must
-// release it on the same conn.
-func (m *Migrator) acquireLock(ctx context.Context, conn *sql.Conn) error {
+// exec runs a script outside a transaction, through the dialect if it is an
+// Executor.
+func (m *Migrator) exec(ctx context.Context, conn *sql.Conn, script string) error {
+	if e, ok := m.dialect.(Executor); ok {
+		return e.Exec(ctx, conn, script)
+	}
+	_, err := conn.ExecContext(ctx, script)
+	return err
+}
+
+// acquireLock takes the dialect's lock for the namespace on conn. It returns
+// the context to do the work under the lock with, cancelled if a Locker loses
+// the lock, and a function that releases it, which the caller must call.
+func (m *Migrator) acquireLock(ctx context.Context, conn *sql.Conn) (context.Context, func(), error) {
+	if l, ok := m.dialect.(Locker); ok {
+		slog.Debug("acquiring migration lock", "namespace", m.namespace)
+		lctx, release, err := l.AcquireLock(ctx, m.db, conn, m.namespace)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to acquire migration lock: %w", err)
+		}
+		return lctx, release, nil
+	}
 	if q := m.dialect.Lock(); q != "" {
 		slog.Debug("acquiring migration lock", "namespace", m.namespace)
 		if _, err := conn.ExecContext(ctx, q, m.namespace); err != nil {
-			return fmt.Errorf("failed to acquire migration lock: %w", err)
+			return nil, nil, fmt.Errorf("failed to acquire migration lock: %w", err)
 		}
 	}
-	return nil
+	return ctx, func() { m.releaseLock(ctx, conn) }, nil
 }
 
 func (m *Migrator) releaseLock(ctx context.Context, conn *sql.Conn) {
@@ -287,10 +323,11 @@ func (m *Migrator) Run(ctx context.Context, migrations []*source.Migration) erro
 	}
 	defer conn.Close()
 
-	if err := m.acquireLock(ctx, conn); err != nil {
+	ctx, release, err := m.acquireLock(ctx, conn)
+	if err != nil {
 		return err
 	}
-	defer m.releaseLock(ctx, conn)
+	defer release()
 
 	var numbered, current []*source.Migration
 	for _, mig := range migrations {
@@ -441,7 +478,7 @@ func VerifyAgainstShadow(ctx context.Context, shadowDB *sql.DB, dialect Dialect,
 
 	if baselines := NewMigrator(shadowDB, dialect, fsys, true, opts...).baselines; len(baselines) > 0 {
 		slog.Info("loading shadow baseline", "files", len(baselines))
-		if err := loadBaselines(ctx, shadowDB, baselines); err != nil {
+		if err := loadBaselines(ctx, shadowDB, dialect, baselines); err != nil {
 			return fmt.Errorf("failed to load shadow baseline: %w", err)
 		}
 	}
@@ -479,7 +516,7 @@ var psqlRestrictLine = regexp.MustCompile(`(?m)^\\(?:un)?restrict(?:[ \t].*)?$`)
 // discards it. Baselines are often pg_dump output, which changes session
 // settings such as search_path; a discarded connection can't carry them into
 // the replay.
-func loadBaselines(ctx context.Context, shadowDB *sql.DB, baselines []string) error {
+func loadBaselines(ctx context.Context, shadowDB *sql.DB, dialect Dialect, baselines []string) error {
 	conn, err := shadowDB.Conn(ctx)
 	if err != nil {
 		return err
@@ -489,7 +526,8 @@ func loadBaselines(ctx context.Context, shadowDB *sql.DB, baselines []string) er
 
 	for i, q := range baselines {
 		q = psqlRestrictLine.ReplaceAllString(q, "")
-		if _, err := conn.ExecContext(ctx, q); err != nil {
+		m := &Migrator{db: shadowDB, dialect: dialect}
+		if err := m.exec(ctx, conn, q); err != nil {
 			return fmt.Errorf("baseline %d: %w", i+1, err)
 		}
 	}

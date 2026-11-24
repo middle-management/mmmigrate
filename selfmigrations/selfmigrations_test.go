@@ -7,7 +7,7 @@ import (
 )
 
 func TestChains(t *testing.T) {
-	for _, dir := range []string{"postgres", "sqlite", "mysql"} {
+	for _, dir := range []string{"postgres", "sqlite", "mysql", "spanner"} {
 		t.Run(dir, func(t *testing.T) {
 			if err := source.ValidateChain(dir); err != nil {
 				t.Fatal(err)

@@ -5,7 +5,7 @@ description: Use when a project uses mmmigrate for database migrations, when the
 
 # mmmigrate
 
-File-based forward-only SQL migration tool for PostgreSQL, SQLite, and MySQL: `current.sql` dev workflow, `@include` for shared SQL, merkle chain integrity. No down migrations — roll forward only.
+File-based forward-only SQL migration tool for PostgreSQL, SQLite, MySQL, and Spanner: `current.sql` dev workflow, `@include` for shared SQL, merkle chain integrity. No down migrations — roll forward only.
 
 ## Setup
 
@@ -14,7 +14,7 @@ mkdir -p migrations
 touch migrations/current.sql   # your working file
 ```
 
-Build the CLI with a driver tag: `cd cmd/mmmigrate && go build -tags sqlite .`, `go build -tags postgres .`, or `go build -tags mysql .`
+Build the CLI with a driver tag: `cd cmd/mmmigrate && go build -tags sqlite .`, `go build -tags postgres .`, `go build -tags mysql .`, or `go build -tags spanner .`
 
 ## Workflow
 
@@ -45,7 +45,7 @@ edit current.sql → apply -current (dev, iterate) → commit → apply (prod)
 | `watch [-debounce DURATION]` | yes | Watch current.sql + includes and re-apply on change (dev loop) |
 | `version` | no | Print version |
 
-*`commit` skips the DB test when `-skip-verify` is set. `-shadow-url` (or `SHADOW_DATABASE_URL`) additionally replays the full chain on a disposable database — required for MySQL DDL. The shadow reset empties the whole database; if migrations depend on objects they don't create (another app's schema), pass them with `-shadow-baseline FILE` (repeatable, or `MMMIGRATE_SHADOW_BASELINE`), loaded after the reset and before the replay.
+*`commit` skips the DB test when `-skip-verify` is set. `-shadow-url` (or `SHADOW_DATABASE_URL`) additionally replays the full chain on a disposable database — required for MySQL and Spanner DDL. The shadow reset empties the whole database; if migrations depend on objects they don't create (another app's schema), pass them with `-shadow-baseline FILE` (repeatable, or `MMMIGRATE_SHADOW_BASELINE`), loaded after the reset and before the replay.
 
 All commands accept `-migrations DIR` (default: `migrations`). DB commands accept `-database-url URL` (default: `DATABASE_URL` env). `apply`, `status`, `commit` and `watch` also accept `-namespace NAME` (default: `MMMIGRATE_NAMESPACE` env, then `default`) for several apps sharing one database.
 
@@ -84,7 +84,7 @@ Each driver is a separate Go module. As a library:
 ```go
 import (
     "github.com/middle-management/mmmigrate"
-    "github.com/middle-management/mmmigrate/driver/postgres" // or driver/sqlite, driver/mysql
+    "github.com/middle-management/mmmigrate/driver/postgres" // or driver/sqlite, driver/mysql, driver/spanner
 )
 
 // Use the dialect explicitly:
@@ -102,6 +102,7 @@ import (
 
 - **PostgreSQL**: `mmmigrate.applied`, `mmmigrate.current` (own schema)
 - **SQLite/MySQL**: `mmmigrate_applied`, `mmmigrate_current`
+- **Spanner**: `mmmigrate_applied`, `mmmigrate_current`, `mmmigrate_progress`, `mmmigrate_lock`
 
 Both tables have a `namespace` column (`default` unless `-namespace` / `MMMIGRATE_NAMESPACE` is set); `namespace` has no default, so include it in manual INSERTs. Library: `mmmigrate.WithNamespace("name")`. Each app sharing a database needs its own namespace and its own shadow database; use the same namespace for every command.
 
@@ -113,6 +114,15 @@ MySQL/MariaDB DDL (`CREATE TABLE`, `ALTER TABLE`) causes an **implicit commit** 
 - **Partial failures** leave completed DDL in place. Keep migrations small — ideally one DDL statement per migration.
 
 PostgreSQL and SQLite do not have this limitation.
+
+## Spanner Limitations
+
+Spanner (PostgreSQL dialect) can't run DDL in a transaction, nor DDL and DML in the same one. This means:
+
+- **Non-transactional DDL**: each migration runs outside a transaction, with consecutive DDL statements grouped into batches. It is recorded in `mmmigrate_applied` only once every statement has succeeded.
+- **Interrupted migrations** resume from `mmmigrate_progress`; the group that was under way re-runs in recovery mode, with idempotent forms (`IF NOT EXISTS`, `IF EXISTS`) where Spanner has them. Statements without one (`ALTER COLUMN`, `ADD CONSTRAINT`, `DROP COLUMN`) fail if they already took effect, so keep them in a migration of their own.
+- **Locking** is a lease row per namespace in `mmmigrate_lock`; a run that dies leaves its lease to expire (60 seconds by default).
+- **`commit` needs `-shadow-url`** (or `-skip-verify`), since there is no transaction to roll back. The shadow reset drops every user object, tracking tables included.
 
 ## Common Mistakes
 

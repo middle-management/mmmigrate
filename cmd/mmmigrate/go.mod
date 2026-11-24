@@ -4,9 +4,11 @@ go 1.26.1
 
 require (
 	github.com/fsnotify/fsnotify v1.9.0
+	github.com/jackc/pgx/v5 v5.9.1
 	github.com/middle-management/mmmigrate v0.0.0
 	github.com/middle-management/mmmigrate/driver/mysql v0.0.0
 	github.com/middle-management/mmmigrate/driver/postgres v0.0.0
+	github.com/middle-management/mmmigrate/driver/spanner v0.0.0
 	github.com/middle-management/mmmigrate/driver/sqlite v0.0.0
 )
 
@@ -17,7 +19,6 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
-	github.com/jackc/pgx/v5 v5.9.1 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
@@ -35,5 +36,6 @@ replace (
 	github.com/middle-management/mmmigrate => ../..
 	github.com/middle-management/mmmigrate/driver/mysql => ../../driver/mysql
 	github.com/middle-management/mmmigrate/driver/postgres => ../../driver/postgres
+	github.com/middle-management/mmmigrate/driver/spanner => ../../driver/spanner
 	github.com/middle-management/mmmigrate/driver/sqlite => ../../driver/sqlite
 )

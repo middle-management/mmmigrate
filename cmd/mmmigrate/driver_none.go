@@ -1,4 +1,4 @@
-//go:build !postgres && !sqlite && !mysql
+//go:build !postgres && !sqlite && !mysql && !spanner
 
 package main
 

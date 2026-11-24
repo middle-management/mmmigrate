@@ -11,6 +11,7 @@
 | Non-idempotent `current.sql` | `current.sql` is re-run when it changes — use `IF NOT EXISTS`, `CREATE OR REPLACE`, etc. |
 | Duplicate version numbers | Two files with the same `NNN_` prefix will error on load. |
 | MySQL `commit` leaves dirty state | DDL can't be rolled back — use `-shadow-url` for safe verification. |
+| Spanner `commit` refuses to run | DDL can't run in a transaction, so `commit` requires `-shadow-url` (or `-skip-verify`). |
 
 ## How do I undo an applied migration?
 
@@ -47,7 +48,7 @@ mmmigrate works out what to run purely from its tracking table, which starts emp
 INSERT INTO mmmigrate.applied (namespace, version, name) VALUES ('default', 1, 'initial_schema');
 ```
 
-`applied_at` defaults, and only `version` is matched against the files, within the namespace mmmigrate runs with. `namespace` has no default, so always give it: `'default'`, or your own namespace if you set one. Use `mmmigrate_applied` on SQLite and MySQL. [Migrating from Graphile Migrate](migrating-from-graphile.md#6-record-existing-migrations-as-applied) walks through it with a script to generate the rows.
+`applied_at` defaults, and only `version` is matched against the files, within the namespace mmmigrate runs with. `namespace` has no default, so always give it: `'default'`, or your own namespace if you set one. Use `mmmigrate_applied` on SQLite, MySQL and Spanner. [Migrating from Graphile Migrate](migrating-from-graphile.md#6-record-existing-migrations-as-applied) walks through it with a script to generate the rows.
 
 ## Can I have multiple `current.sql` files?
 
@@ -74,6 +75,7 @@ The CI matrix runs against:
 - PostgreSQL 14, 15, 16, 17 and 18: every major version still supported upstream.
 - MySQL 8.4 and 9.7 (the LTS lines) and the current innovation release.
 - SQLite via `modernc.org/sqlite` (latest).
+- Spanner's PostgreSQL dialect, on the emulator (`gcr.io/cloud-spanner-pg-adapter/pgadapter-emulator`), through PGAdapter and through go-sql-spanner.
 
 See [`.github/workflows/ci.yml`](https://github.com/middle-management/mmmigrate/blob/main/.github/workflows/ci.yml) for the canonical matrix.
 
@@ -84,6 +86,7 @@ See [`.github/workflows/ci.yml`](https://github.com/middle-management/mmmigrate/
 | PostgreSQL | Schema `mmmigrate`, tables `applied` and `current` |
 | SQLite | Tables `mmmigrate_applied` and `mmmigrate_current` |
 | MySQL | Tables `mmmigrate_applied` and `mmmigrate_current` |
+| Spanner | Tables `mmmigrate_applied`, `mmmigrate_current`, `mmmigrate_progress` and `mmmigrate_lock` |
 
 Both tables have a `namespace` column (`default` unless you set one), so one database can hold several apps' histories. `applied` has one row per `(namespace, version)`; `current` has one row per namespace.
 

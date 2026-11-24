@@ -1,6 +1,8 @@
 # Drivers
 
-mmmigrate supports PostgreSQL, SQLite, and MySQL through pluggable drivers. Each driver is a separate Go module that implements the `mmmigrate.Dialect` interface (locking, tracking-table SQL, parameter style, reset SQL). Changes to the tracking tables themselves are migrations in the root module's `selfmigrations/` package, one directory per SQL flavour, which each dialect returns from `SelfMigrations()`.
+mmmigrate supports PostgreSQL, SQLite, MySQL, and Spanner through pluggable drivers. Each driver is a separate Go module that implements the `mmmigrate.Dialect` interface (locking, tracking-table SQL, parameter style, reset SQL). Changes to the tracking tables themselves are migrations in the root module's `selfmigrations/` package, one directory per SQL flavour, which each dialect returns from `SelfMigrations()`.
+
+A dialect may also implement the optional `Locker`, `Executor` and `Resetter` interfaces (see `dialect.go`) when the database lacks session locks or transactional DDL. See [Library API](../library.md#optional-dialect-interfaces).
 
 ## Choosing a driver
 
@@ -24,6 +26,12 @@ The CLI is built with **Go build tags** so each binary contains exactly one driv
     go install -tags mysql github.com/middle-management/mmmigrate/cmd/mmmigrate@latest
     ```
 
+=== "Spanner"
+
+    ```bash
+    go install -tags spanner github.com/middle-management/mmmigrate/cmd/mmmigrate@latest
+    ```
+
 If you want a single binary that supports more than one driver, build it yourself — the build tags are not mutually exclusive at compile time, just selected one-at-a-time in the published install commands.
 
 The Homebrew formula at [middle-management/homebrew-tap](https://github.com/middle-management/homebrew-tap) ships a prebuilt binary; check the formula for which driver(s) it includes.
@@ -35,6 +43,7 @@ The Homebrew formula at [middle-management/homebrew-tap](https://github.com/midd
 | [PostgreSQL](postgres.md) | Advisory locks, schema-based tracking tables, transactional DDL |
 | [SQLite](sqlite.md) | File-level locking, transactional DDL, ideal for tests |
 | [MySQL](mysql.md) | Named locks, **non-transactional DDL**, shadow database required |
+| [Spanner](spanner.md) | Lease-row lock, non-transactional DDL run in batches with resumable progress, shadow database required |
 
 ## Module layout
 
@@ -46,6 +55,7 @@ The Homebrew formula at [middle-management/homebrew-tap](https://github.com/midd
 | PostgreSQL driver | `github.com/middle-management/mmmigrate/driver/postgres` | `pgx` + `Dialect` |
 | SQLite driver | `github.com/middle-management/mmmigrate/driver/sqlite` | `modernc.org/sqlite` + `Dialect` |
 | MySQL driver | `github.com/middle-management/mmmigrate/driver/mysql` | `go-sql-driver/mysql` + `Dialect` |
+| Spanner driver | `github.com/middle-management/mmmigrate/driver/spanner` | `Dialect` only; bring pgx (via PGAdapter) or go-sql-spanner |
 | pglite driver (`js/wasm` only) | `github.com/middle-management/mmmigrate/driver/pglite` | bridges to pglite via `syscall/js` — see [WASM](../wasm.md) |
 
 The library module imports no database drivers — that's why it's safe to depend on from any project. Driver modules pull in their respective `database/sql` adapters.

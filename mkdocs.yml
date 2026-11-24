@@ -1,5 +1,5 @@
 site_name: mmmigrate
-site_description: Forward-only SQL migration tool for PostgreSQL, SQLite, and MySQL.
+site_description: Forward-only SQL migration tool for PostgreSQL, SQLite, MySQL, and Spanner.
 site_url: https://middle-management.github.io/mmmigrate/
 repo_url: https://github.com/middle-management/mmmigrate
 repo_name: middle-management/mmmigrate
@@ -65,6 +65,7 @@ nav:
       - PostgreSQL: drivers/postgres.md
       - SQLite: drivers/sqlite.md
       - MySQL: drivers/mysql.md
+      - Spanner: drivers/spanner.md
   - Library API: library.md
   - WASM (pglite): wasm.md
   - Migrating from Graphile: migrating-from-graphile.md

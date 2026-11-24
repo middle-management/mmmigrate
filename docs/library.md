@@ -11,6 +11,7 @@ mmmigrate is also a Go library. The root module is pure — it depends on `datab
 | PostgreSQL dialect | `github.com/middle-management/mmmigrate/driver/postgres` |
 | SQLite dialect | `github.com/middle-management/mmmigrate/driver/sqlite` |
 | MySQL dialect | `github.com/middle-management/mmmigrate/driver/mysql` |
+| Spanner dialect | `github.com/middle-management/mmmigrate/driver/spanner` |
 | pglite dialect (WASM) | `github.com/middle-management/mmmigrate/driver/pglite` |
 
 ## Quick start: run migrations on app startup
@@ -98,14 +99,24 @@ Pass the same namespace to every call for a given app. See [Namespaces](namespac
 import "github.com/middle-management/mmmigrate/driver/postgres" // PostgreSQL
 import "github.com/middle-management/mmmigrate/driver/sqlite"   // SQLite
 import "github.com/middle-management/mmmigrate/driver/mysql"    // MySQL
+import "github.com/middle-management/mmmigrate/driver/spanner"  // Spanner (PostgreSQL dialect)
 
 // Then pass an instance to RunMigrations:
 postgres.Dialect{}
 sqlite.Dialect{}
 mysql.Dialect{}
+spanner.Dialect{}
 ```
 
-Each driver module imports the corresponding `database/sql` adapter (`pgx`, `modernc.org/sqlite`, `go-sql-driver/mysql`). Importing the dialect package transitively pulls in its driver — which is what you want when embedding mmmigrate in an application.
+Each driver module imports the corresponding `database/sql` adapter (`pgx`, `modernc.org/sqlite`, `go-sql-driver/mysql`). Importing the dialect package transitively pulls in its driver — which is what you want when embedding mmmigrate in an application. Spanner is the exception: its module imports no adapter, so you open the connection yourself (pgx through PGAdapter, or go-sql-spanner) and pass `spanner.Dialect{}`. See [Spanner](drivers/spanner.md).
+
+## Optional dialect interfaces
+
+Beyond `Dialect`, a dialect can implement these interfaces (defined in `dialect.go`) when its database needs something the SQL-string methods can't express.
+
+- **`Resetter`** — for dialects whose reset can't be a single SQL script, for example because some objects can't be dropped from dynamic SQL. Shadow verification calls `Reset(ctx, conn)` in place of executing `ResetSQL`.
+- **`Locker`** — for dialects whose database has no session lock, so they take one another way, such as a lease row (Spanner). The engine calls `AcquireLock` in place of executing `Lock` and `Unlock`. It returns a context that is cancelled if the lock is lost, which the work under the lock runs with, and a function that releases the lock.
+- **`Executor`** — for dialects whose database can't run a migration and its record in one transaction, for example because DDL can't run in a transaction at all (Spanner). The engine hands it every script it would otherwise execute itself (`Exec`, `ApplyMigration`, `ApplyCurrent`). A migration that fails or is interrupted must not be recorded, and the next run must be able to apply it again.
 
 ## Source-level operations
 

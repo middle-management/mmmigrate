@@ -1,6 +1,6 @@
 # mmmigrate
 
-A forward-only SQL migration tool for **PostgreSQL**, **SQLite**, and **MySQL**, inspired by [Graphile Migrate](https://github.com/graphile/migrate).
+A forward-only SQL migration tool for **PostgreSQL**, **SQLite**, **MySQL**, and **Spanner**, inspired by [Graphile Migrate](https://github.com/graphile/migrate).
 
 Migrations are plain SQL files. You edit `current.sql` during development, commit it as a numbered migration when ready, and apply to production. Shared SQL (functions, views) can be reused across migrations via `@include` directives. A merkle chain ensures no committed migration is ever tampered with.
 
@@ -30,6 +30,12 @@ Migrations are plain SQL files. You edit `current.sql` during development, commi
 
     ```bash
     go install -tags mysql github.com/middle-management/mmmigrate/cmd/mmmigrate@latest
+    ```
+
+=== "Go install (Spanner)"
+
+    ```bash
+    go install -tags spanner github.com/middle-management/mmmigrate/cmd/mmmigrate@latest
     ```
 
 Or download a binary from [GitHub Releases](https://github.com/middle-management/mmmigrate/releases).
@@ -67,7 +73,7 @@ DATABASE_URL="postgres://prod/myapp" mmmigrate apply
 -   **[Includes](includes.md)** — reuse shared SQL with `@include` directives.
 -   **[Integrity](integrity.md)** — checksums, merkle chain, and `validate`.
 -   **[Shadow database](shadow-database.md)** — verify migrations on a disposable DB before commit.
--   **[Drivers](drivers/index.md)** — PostgreSQL, SQLite, MySQL specifics.
+-   **[Drivers](drivers/index.md)** — PostgreSQL, SQLite, MySQL, Spanner specifics.
 -   **[Library API](library.md)** — embed mmmigrate in a Go program.
 -   **[WASM (pglite)](wasm.md)** — run migrations in the browser against pglite.
 -   **[Migrating from Graphile](migrating-from-graphile.md)** — porting notes and feature comparison.
