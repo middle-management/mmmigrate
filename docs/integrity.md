@@ -34,9 +34,39 @@ mmmigrate validate
 
 It fails if:
 
+- Two migrations share a version.
 - Any migration body has changed since commit (checksum mismatch).
 - Any migration was renumbered, deleted, or inserted out of order (chain mismatch).
 - The chain links don't match the stored values.
+
+## Two branches, one version
+
+The usual way two migrations end up with one version is two branches that each run `commit` off the same main: both take the next number, both chain after the same predecessor, and their files have different names, so git merges them without a conflict. `apply` then refuses to load the directory (`duplicate migration version N`), and every deployment of the merged code fails to start.
+
+`validate` reports it as such:
+
+```
+duplicate migration version 30: 030_add_tags.sql and 030_batch_draws.sql (renumber the later one and recompute its chain)
+```
+
+Each branch's own CI passed, since each branch alone is valid. To catch it before merge, `validate` has to run on the merge result: enable "require branches to be up to date before merging" or a merge queue in the repository's settings, and run `validate` (or a test that calls `source.ValidateChain`) in CI on `pull_request` and, with a merge queue, `merge_group` events.
+
+To fix it, renumber the migration that merged second: rename the file to the next free version and rewrite its `Chain:` header to chain after its new predecessor (its body and `Checksum:` stay the same).
+
+A database that already applied it under the old number has it recorded there. `apply` and `dry-run` compare each recorded name with the file of that version, and refuse such a database rather than skip the other migration and run this one a second time:
+
+```
+namespace "default": version 30 is recorded as applied as "batch_draws", but the migration with that version is 030_add_tags.sql; the database had a different migration applied under this version. "batch_draws" is now version 31: move its record (namespace 'default', version 30, name 'batch_draws' in the applied table) to version 31, and the next apply runs 030_add_tags.sql
+```
+
+Move the record as it says, e.g. on PostgreSQL
+
+```sql
+UPDATE mmmigrate.applied SET version = 31
+WHERE namespace = 'default' AND version = 30 AND name = 'batch_draws';
+```
+
+On Spanner, which can't update a key column, insert a copy of the row at version 31 and delete the old one.
 
 ## CI gate
 

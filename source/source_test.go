@@ -526,3 +526,44 @@ func TestChainEmptyDir(t *testing.T) {
 		t.Fatalf("expected no error for empty dir: %v", err)
 	}
 }
+
+// Two branches each commit the next version after the same migration and are
+// merged: both files survive, with one version. The chain names the
+// duplicate, whichever order the files sort in, rather than reporting a
+// chain mismatch on one of them.
+func TestChainDetectsDuplicateVersion(t *testing.T) {
+	base := t.TempDir()
+	commitMigration(t, base, `CREATE TABLE a (id INTEGER);`, "first")
+
+	branch := func(sql, desc string) string {
+		dir := t.TempDir()
+		data, err := os.ReadFile(filepath.Join(base, "001_first.sql"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeSQL(t, dir, "001_first.sql", string(data))
+		commitMigration(t, dir, sql, desc)
+		return dir
+	}
+	left := branch(`CREATE TABLE b (id INTEGER);`, "add b")
+	right := branch(`CREATE TABLE c (id INTEGER);`, "add c")
+
+	merged := t.TempDir()
+	for _, f := range []string{filepath.Join(left, "001_first.sql"), filepath.Join(left, "002_add_b.sql"), filepath.Join(right, "002_add_c.sql")} {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeSQL(t, merged, filepath.Base(f), string(data))
+	}
+
+	for _, dir := range []string{left, right} {
+		if err := source.ValidateChain(dir); err != nil {
+			t.Fatalf("each branch alone is valid: %v", err)
+		}
+	}
+	err := source.ValidateChain(merged)
+	if err == nil || !strings.Contains(err.Error(), "duplicate migration version 2: 002_add_b.sql and 002_add_c.sql") {
+		t.Fatalf("expected the duplicate version named, got %v", err)
+	}
+}
