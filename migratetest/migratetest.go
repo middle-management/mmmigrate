@@ -204,6 +204,65 @@ func Run(t *testing.T, h Harness) {
 	t.Run("SingleConnectionPool", func(t *testing.T) { testSingleConnectionPool(t, h) })
 	t.Run("SelfMigrations", func(t *testing.T) { testSelfMigrations(t, h) })
 	t.Run("ShadowBaseline", func(t *testing.T) { testShadowBaseline(t, h) })
+	t.Run("RecordedUnderOtherName", func(t *testing.T) { testRecordedUnderOtherName(t, h) })
+}
+
+// testRecordedUnderOtherName: two branches each committed a version 2, one
+// database applied branch B's, and after the merge B's was renumbered 3.
+// Matching by version alone would skip A's 2, never applied, and run B's again
+// as 3. The run must refuse instead, apply nothing, and say how to fix it;
+// once the record is moved, A's 2 applies.
+func testRecordedUnderOtherName(t *testing.T, h Harness) {
+	db := h.OpenDB(t)
+	ctx := context.Background()
+	d := h.Dialect(t)
+	t.Cleanup(func() {
+		for _, table := range []string{"rn_one", "rn_a", "rn_b"} {
+			db.Exec("DROP TABLE IF EXISTS " + table)
+		}
+	})
+
+	dir := t.TempDir()
+	writeSQL(t, dir, "001_one.sql", `CREATE TABLE rn_one (id INTEGER PRIMARY KEY);`)
+	writeSQL(t, dir, "002_add_b.sql", `CREATE TABLE rn_b (id INTEGER PRIMARY KEY);`)
+	if err := mmmigrate.RunMigrations(ctx, db, d, os.DirFS(dir), false); err != nil {
+		t.Fatal(err)
+	}
+
+	os.Remove(filepath.Join(dir, "002_add_b.sql"))
+	writeSQL(t, dir, "002_add_a.sql", `CREATE TABLE rn_a (id INTEGER PRIMARY KEY);`)
+	writeSQL(t, dir, "003_add_b.sql", `CREATE TABLE rn_b (id INTEGER PRIMARY KEY);`)
+	fsys := os.DirFS(dir)
+	for _, run := range []func() error{
+		func() error { return mmmigrate.RunMigrations(ctx, db, d, fsys, false) },
+		func() error { _, err := mmmigrate.DryRun(ctx, db, d, fsys, false); return err },
+	} {
+		err := run()
+		if err == nil || !strings.Contains(err.Error(), `version 2 is recorded as applied as "add_b"`) ||
+			!strings.Contains(err.Error(), `"add_b" is now version 3`) {
+			t.Fatalf("expected the mismatched record refused, got %v", err)
+		}
+	}
+	if n := appliedCount(t, db, h); n != 2 {
+		t.Fatalf("expected nothing applied, got %d records", n)
+	}
+
+	// Copy and delete rather than UPDATE: Spanner can't update a key.
+	for _, q := range []string{
+		"INSERT INTO " + h.TrackingTable + " (namespace, version, name, applied_at) SELECT namespace, 3, name, applied_at FROM " + h.TrackingTable + " WHERE namespace = 'default' AND version = 2 AND name = 'add_b'",
+		"DELETE FROM " + h.TrackingTable + " WHERE namespace = 'default' AND version = 2 AND name = 'add_b'",
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	if err := mmmigrate.RunMigrations(ctx, db, d, fsys, false); err != nil {
+		t.Fatal(err)
+	}
+	rowCount(t, db, "rn_a") // fails the test if A's 2 didn't run
+	if n := appliedCount(t, db, h); n != 3 {
+		t.Errorf("expected 3 applied migrations, got %d", n)
+	}
 }
 
 // testSchema runs the fixture migrations (without current.sql) and compares

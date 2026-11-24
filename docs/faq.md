@@ -48,7 +48,7 @@ mmmigrate works out what to run purely from its tracking table, which starts emp
 INSERT INTO mmmigrate.applied (namespace, version, name) VALUES ('default', 1, 'initial_schema');
 ```
 
-`applied_at` defaults, and only `version` is matched against the files, within the namespace mmmigrate runs with. `namespace` has no default, so always give it: `'default'`, or your own namespace if you set one. Use `mmmigrate_applied` on SQLite, MySQL and Spanner. [Migrating from Graphile Migrate](migrating-from-graphile.md#6-record-existing-migrations-as-applied) walks through it with a script to generate the rows.
+`applied_at` defaults, except on Spanner, where you give it (`CURRENT_TIMESTAMP`). `version` and `name` must be the file's (`001_initial_schema.sql` is version 1, name `initial_schema`), within the namespace mmmigrate runs with: a version recorded under another name is refused, since it means the database had a different migration applied under that version ([Integrity](integrity.md#two-branches-one-version)). `namespace` has no default, so always give it: `'default'`, or your own namespace if you set one. Use `mmmigrate_applied` on SQLite, MySQL and Spanner. [Migrating from Graphile Migrate](migrating-from-graphile.md#6-record-existing-migrations-as-applied) walks through it with a script to generate the rows.
 
 ## Can I have multiple `current.sql` files?
 

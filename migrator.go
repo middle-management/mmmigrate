@@ -303,6 +303,10 @@ func (m *Migrator) applyNumbered(ctx context.Context, conn *sql.Conn, numbered [
 		return numbered[i].Version < numbered[j].Version
 	})
 
+	if err := checkRecorded(m.namespace, applied, numbered); err != nil {
+		return err
+	}
+
 	for _, mig := range numbered {
 		if _, ok := applied[mig.Version]; ok {
 			slog.Debug("migration already applied", "namespace", m.namespace, "version", mig.Version, "name", mig.Name)
@@ -311,6 +315,36 @@ func (m *Migrator) applyNumbered(ctx context.Context, conn *sql.Conn, numbered [
 		if err := m.runMigration(ctx, conn, mig); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// checkRecorded refuses a database where a version is recorded as applied
+// under a different name than the migration file with that version has. The
+// database then had another migration applied under that version, typically
+// one of two that were committed with the same version on different branches
+// and since renumbered. Matching by version alone would skip this file, never
+// applied, and run the recorded one again under its new version.
+func checkRecorded(namespace string, applied map[int]*source.Migration, numbered []*source.Migration) error {
+	byName := make(map[string]int, len(numbered))
+	for _, mig := range numbered {
+		byName[mig.Name] = mig.Version
+	}
+	for _, mig := range numbered {
+		rec, ok := applied[mig.Version]
+		if !ok || rec.Name == mig.Name {
+			continue
+		}
+		msg := fmt.Sprintf("namespace %q: version %d is recorded as applied as %q, but the migration with that version is %03d_%s.sql; "+
+			"the database had a different migration applied under this version", namespace, mig.Version, rec.Name, mig.Version, mig.Name)
+		if v, ok := byName[rec.Name]; ok {
+			if _, done := applied[v]; !done {
+				msg += fmt.Sprintf(". %q is now version %d: move its record (namespace '%s', version %d, name '%s' in the applied table) to version %d, "+
+					"and the next apply runs %03d_%s.sql",
+					rec.Name, v, namespace, mig.Version, rec.Name, v, mig.Version, mig.Name)
+			}
+		}
+		return fmt.Errorf("%s", msg)
 	}
 	return nil
 }
@@ -455,6 +489,10 @@ func DryRun(ctx context.Context, db *sql.DB, dialect Dialect, fsys fs.FS, applyC
 	sort.Slice(numbered, func(i, j int) bool {
 		return numbered[i].Version < numbered[j].Version
 	})
+
+	if err := checkRecorded(migrator.namespace, applied, numbered); err != nil {
+		return nil, err
+	}
 
 	// Prepend numbered migrations before current.sql.
 	var result []string
