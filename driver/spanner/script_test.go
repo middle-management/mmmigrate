@@ -11,12 +11,14 @@ func TestSplitSQL(t *testing.T) {
 CREATE TABLE a (x text DEFAULT ';'); /* b; */ INSERT INTO a VALUES ($1, 'it''s');
 INSERT INTO a VALUES (E'it\'s; fine');
 SELECT $tag$ ; $tag$, "semi;colon" FROM a;
+/* outer; /* nested; */ still outer; */ SELECT 1;
 `)
 	want := []string{
 		`CREATE TABLE a (x text DEFAULT ';')`,
 		`INSERT INTO a VALUES ($1, 'it''s')`,
 		`INSERT INTO a VALUES (E'it\'s; fine')`,
 		`SELECT $tag$ ; $tag$, "semi;colon" FROM a`,
+		`SELECT 1`,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %q\nwant %q", got, want)
@@ -59,7 +61,8 @@ func TestIdempotent(t *testing.T) {
 		`ALTER TABLE a ADD COLUMN b text`:           `ALTER TABLE a ADD COLUMN IF NOT EXISTS b text`,
 		`ALTER TABLE "My T".x ADD COLUMN b text`:    `ALTER TABLE "My T".x ADD COLUMN IF NOT EXISTS b text`,
 		`ALTER TABLE a ALTER COLUMN b SET NOT NULL`: `ALTER TABLE a ALTER COLUMN b SET NOT NULL`,
-		`CREATE CHANGE STREAM cs FOR a`:             `CREATE CHANGE STREAM cs FOR a`,
+		`CREATE CHANGE STREAM cs FOR a`:             `CREATE CHANGE STREAM IF NOT EXISTS cs FOR a`,
+		`DROP CHANGE STREAM cs`:                     `DROP CHANGE STREAM cs`,
 		`ALTER TABLE a ADD CONSTRAINT fk FOREIGN KEY (b) REFERENCES c`: `ALTER TABLE a ADD CONSTRAINT fk FOREIGN KEY (b) REFERENCES c`,
 	} {
 		if got := idempotent(in); got != want {

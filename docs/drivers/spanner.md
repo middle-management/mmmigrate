@@ -78,12 +78,12 @@ If a migration fails, or the process dies, part-way, the statements that ran sta
 
     | Written | Run as |
     |---------|--------|
-    | `CREATE TABLE / INDEX / SEQUENCE / SCHEMA x` | `CREATE … IF NOT EXISTS x` |
+    | `CREATE TABLE / INDEX / SEQUENCE / SCHEMA / CHANGE STREAM x` | `CREATE … IF NOT EXISTS x` |
     | `CREATE VIEW x` | `CREATE OR REPLACE VIEW x` |
     | `DROP TABLE / INDEX / SEQUENCE / SCHEMA / VIEW x` | `DROP … IF EXISTS x` |
     | `ALTER TABLE t ADD COLUMN c` | `ALTER TABLE t ADD COLUMN IF NOT EXISTS c` |
 
-    Statements without such a form (`ALTER COLUMN`, `ADD CONSTRAINT`, `DROP COLUMN`, change streams) run as written, and fail if they had already taken effect.
+    Statements without such a form (`ALTER COLUMN`, `ADD CONSTRAINT`, `DROP COLUMN`, `DROP CHANGE STREAM`; Spanner has no `IF [NOT] EXISTS` for them) run as written, and fail if they had already taken effect.
 
     A group in which one statement drops something a later statement names (`DROP TABLE t; CREATE TABLE t (…)`, or `ALTER TABLE t DROP COLUMN c; ALTER TABLE t ADD COLUMN c …`) isn't re-run at all: if it had completed, the re-run would drop what the later statement made, with the rows written to it since. The run stops instead.
 
@@ -147,6 +147,8 @@ MMMIGRATE_TEST_SPANNER_EMULATOR_HOST=localhost:9010 go test ./...
 ```
 
 Each test resets one database rather than create another: an instance holds at most 100 databases, and PGAdapter can't drop one.
+
+`TestCorpus` runs the statement splitter, the recovery rewrites and the conflict check against real migrations in `driver/spanner/testdata/corpus`, among them patchlog's Spanner baseline. Each file must apply as one migration, and for every point a run could die at (after any DDL statement), the next run must reach the same schema and rows as an uninterrupted run, or stop with one of the recovery errors above. Locally it tries a sample of the crash points; `MMMIGRATE_TEST_CORPUS_FULL=1` (set in CI) tries them all, which takes a few minutes. Add a file there to cover a migration you rely on.
 
 The emulator differs from Spanner in ways the tests allow for: it refuses a schema change while another, or a read-write transaction, is under way (the driver retries those), and it rolls back a whole DDL batch when one statement fails, where Spanner keeps the statements before it.
 

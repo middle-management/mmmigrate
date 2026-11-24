@@ -137,9 +137,18 @@ jobs:
           go-version-file: go.mod
 
       - name: Spanner integration tests (pgx through PGAdapter)
-        run: cd driver/spanner && go test -race ./...
+        run: cd driver/spanner && go test -race -skip TestCorpus ./...
         env:
           MMMIGRATE_TEST_SPANNER_URL: postgres://x@localhost:5432/mmmigrate_test?sslmode=disable
+
+      # The splitter, recovery rewrites and conflict check against the
+      # migrations in driver/spanner/testdata/corpus, resuming after a
+      # simulated crash at every DDL statement (a few minutes).
+      - name: Spanner corpus (every crash point)
+        run: cd driver/spanner && go test -timeout 30m -run TestCorpus -v ./...
+        env:
+          MMMIGRATE_TEST_SPANNER_URL: postgres://x@localhost:5432/mmmigrate_corpus?sslmode=disable
+          MMMIGRATE_TEST_CORPUS_FULL: "1"
 
       - name: Spanner integration tests (go-sql-spanner)
         run: cd driver/spanner/gosqlspannertest && go vet ./... && go test -race ./...

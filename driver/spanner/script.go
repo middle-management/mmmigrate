@@ -83,12 +83,22 @@ func splitSQL(s string) []string {
 			}
 			b.WriteByte('\n')
 		case c == '/' && i+1 < len(s) && s[i+1] == '*':
-			end := strings.Index(s[i+2:], "*/")
-			if end < 0 {
-				i = len(s)
-			} else {
-				i += end + 3
+			// Block comments nest, as in PostgreSQL.
+			depth := 1
+			i += 2
+			for i < len(s) && depth > 0 {
+				switch {
+				case s[i] == '/' && i+1 < len(s) && s[i+1] == '*':
+					depth++
+					i += 2
+				case s[i] == '*' && i+1 < len(s) && s[i+1] == '/':
+					depth--
+					i += 2
+				default:
+					i++
+				}
 			}
+			i-- // the loop's i++ moves past the comment
 			b.WriteByte(' ')
 		case c == '\'' || c == '"':
 			// E'...' strings escape quotes with a backslash; elsewhere a
@@ -160,10 +170,14 @@ func idempotent(q string) string {
 		with string
 	}{{reCreate, " IF NOT EXISTS "}, {reDrop, " IF EXISTS "}, {reAddColumn, " IF NOT EXISTS "}} {
 		if m := re.re.FindStringSubmatchIndex(q); m != nil {
-			// Spanner has no IF [NOT] EXISTS for change streams and search
-			// indexes: leave those as written.
-			if len(m) > 4 && m[4] >= 0 && strings.Contains(strings.ToUpper(q[m[4]:m[5]]), " ") {
-				return q
+			// Spanner has CREATE CHANGE STREAM IF NOT EXISTS, but no IF
+			// EXISTS for dropping one, nor either for search indexes: leave
+			// those as written.
+			if len(m) > 4 && m[4] >= 0 {
+				kind := strings.ToUpper(strings.Join(strings.Fields(q[m[4]:m[5]]), " "))
+				if kind == "SEARCH INDEX" || kind == "CHANGE STREAM" && re.re == reDrop {
+					return q
+				}
 			}
 			return q[:m[3]] + re.with + q[m[1]:]
 		}
