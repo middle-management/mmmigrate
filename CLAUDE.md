@@ -48,3 +48,11 @@ Never edit a dialect's `CreateMigrationsTable` or an existing file in `selfmigra
 - `driver/mysql/` — separate module, MySQL dialect + go-sql-driver
 - `driver/spanner/` — separate module, Spanner (PostgreSQL dialect) Dialect, no driver deps
 - `driver/spanner/gosqlspannertest/` — test-only module running the suite via go-sql-spanner
+
+## Releasing
+
+Each module is versioned by its own tag: the root module by `vX.Y.Z`, each driver by `driver/<name>/vX.Y.Z` (`driver/postgres`, `driver/sqlite`, `driver/mysql`, `driver/spanner`). Go resolves a nested module only through its path-prefixed tag.
+
+1. Publish the GitHub Release `vX.Y.Z` on `main` (this creates the root tag and builds the CLI binaries, `.github/workflows/release.yml`).
+2. In a PR, make each driver's `go.mod` require the root module at `vX.Y.Z` (keep the `replace ../..` for local development), then `go mod tidy` in `cmd/mmmigrate` and `driver/spanner/gosqlspannertest`. A driver requiring the root at a version that doesn't exist breaks `go get` of the driver in any module that doesn't also require the root itself.
+3. After it merges, tag the merge commit `driver/<name>/vX.Y.Z` for each driver and push the tags.

@@ -4,7 +4,7 @@ go 1.26.1
 
 require (
 	github.com/jackc/pgx/v5 v5.9.1
-	github.com/middle-management/mmmigrate v0.0.0
+	github.com/middle-management/mmmigrate v0.8.0
 )
 
 require (

@@ -9,7 +9,7 @@ replace (
 
 require (
 	github.com/googleapis/go-sql-spanner v1.28.0
-	github.com/middle-management/mmmigrate v0.0.0
+	github.com/middle-management/mmmigrate v0.8.0
 	github.com/middle-management/mmmigrate/driver/spanner v0.0.0-00010101000000-000000000000
 )
 
