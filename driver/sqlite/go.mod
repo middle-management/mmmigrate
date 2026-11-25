@@ -3,7 +3,7 @@ module github.com/middle-management/mmmigrate/driver/sqlite
 go 1.26.1
 
 require (
-	github.com/middle-management/mmmigrate v0.0.0
+	github.com/middle-management/mmmigrate v0.8.0
 	modernc.org/sqlite v1.47.0
 )
 
